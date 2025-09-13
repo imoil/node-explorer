@@ -1,0 +1,30 @@
+{
+  "name": "nuxt-tree-component",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "nuxt build",
+    "dev": "nuxt dev",
+    "generate": "nuxt generate",
+    "preview": "nuxt preview",
+    "postinstall": "nuxt prepare"
+  },
+  "dependencies": {
+    "@radix-icons/vue": "^1.0.0",
+    "class-variance-authority": "^0.7.0",
+    "clsx": "^2.1.1",
+    "nuxt": "^3.12.2",
+    "radix-vue": "^1.8.2",
+    "shadcn-vue": "^0.10.4",
+    "tailwind-merge": "^2.3.0",
+    "tailwindcss-animate": "^1.0.7",
+    "vue": "latest",
+    "ws": "^8.17.1"
+  },
+  "devDependencies": {
+    "@types/ws": "^8.5.10",
+    "bun-types": "latest",
+    "tailwindcss": "^3.4.4",
+    "typescript": "^5.5.2"
+  }
+}
