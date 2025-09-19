@@ -89,6 +89,7 @@ import { useRuntimeConfig } from '#app';
 const config = useRuntimeConfig();
 const API_BASE_URL = config.public.apiBaseUrl;
 const treeData = ref([]);
+const flattenedNodes = ref([]);
 const isLoadingRoot = ref(true);
 const virtualTreeRef = ref(null);
 
