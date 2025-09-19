@@ -52,7 +52,7 @@
 </template>
 
 <script setup>
-import { computed } from 'vue';
+import { ref } from 'vue';
 import { RecycleScroller } from 'vue-virtual-scroller';
 import 'vue-virtual-scroller/dist/vue-virtual-scroller.css';
 
@@ -69,30 +69,16 @@ const props = defineProps({
 
 const emit = defineEmits(['toggleNode']);
 
-const flattenTree = (nodes, depth = 0) => {
-  let result = [];
-  for (const node of nodes) {
-    // 1. 현재 노드를 결과에 추가합니다.
-    result.push({ ...node, _depth: depth });
+const scrollerRef = ref(null);
 
-    // 2. 만약 노드가 열려있다면(isOpen), 자식들과 센서들을 렌더링합니다.
-    if (node.isOpen) {
-      // 2a. 자식 '폴더'가 있다면 재귀적으로 처리하여 결과에 추가합니다.
-      if (node.children && node.children.length > 0) {
-        result = result.concat(flattenTree(node.children, depth + 1));
-      }
-      // 2b. '센서'가 있다면 다음 depth로 결과에 추가합니다.
-      if (node.sensors && node.sensors.length > 0) {
-        node.sensors.forEach(sensor => {
-            result.push({ ...sensor, _depth: depth + 1 });
-        });
-      }
-    }
+const scrollToNode = (nodeId) => {
+  const index = props.nodes.findIndex(n => n.id === nodeId);
+  if (index !== -1 && scrollerRef.value) {
+    scrollerRef.value.scrollToItem(index);
   }
-  return result;
 };
 
-const flattenedNodes = computed(() => flattenTree(props.nodes));
+defineExpose({ scrollToNode });
 </script>
 
 <style scoped>

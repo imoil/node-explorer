@@ -41,8 +41,9 @@
               
               <!-- Tree View Component -->
               <VirtualTree
-                v-else-if="treeData.length > 0"
-                :nodes="treeData"
+                v-else-if="flattenedNodes.length > 0"
+                ref="virtualTreeRef"
+                :nodes="flattenedNodes"
                 :highlight-id="highlightedItemId"
                 @toggle-node="handleToggleNode"
               />
@@ -75,7 +76,7 @@
   </v-app>
 </template>
 
-<script setup>
+<script setup lang="ts">
 import { ref, onMounted } from 'vue';
 import TheHeader from '~/components/TheHeader.vue';
 import VirtualTree from '~/components/VirtualTree.vue';
@@ -83,9 +84,13 @@ import SearchResultsModal from '~/components/SearchResultsModal.vue';
 import { useWebSocket } from '~/composables/useWebSocket';
 import { useTreeSearch } from '~/composables/useTreeSearch';
 
-const API_BASE_URL = 'http://localhost:8080';
+import { useRuntimeConfig } from '#app';
+
+const config = useRuntimeConfig();
+const API_BASE_URL = config.public.apiBaseUrl;
 const treeData = ref([]);
 const isLoadingRoot = ref(true);
+const virtualTreeRef = ref(null);
 
 const fetchNodes = async (id = null) => {
   try {
@@ -101,47 +106,116 @@ const fetchNodes = async (id = null) => {
   }
 };
 
-const handleToggleNode = async (node) => {
-  // ========================[ 디버깅 로그 추가 ]========================
-  console.log('Toggling node:', { id: node.id, name: node.name, type: node.type, hasChildren: node.hasChildren });
+const findNodeById = (nodes, id) => {
+  for (const node of nodes) {
+    if (node.id === id) return node;
 
-  // 클릭된 노드가 폴더가 아니거나, 자식이 없다고 명시된 경우 확장을 시도하지 않습니다.
-  if (node.type !== 'folder' || !node.hasChildren) {
-    console.log('Node is not an expandable folder. Aborting toggle.');
-    return;
-  }
-  // =================================================================
+    // Search within the children of the current node
+    if (node.children && node.children.length > 0) {
+      const foundInChildren = findNodeById(node.children, id);
+      if (foundInChildren) return foundInChildren;
+    }
 
-  if (node.isOpen) {
-    node.isOpen = false;
-  } else {
-    node.isOpen = true;
-    // 이전에 자식을 불러온 적이 없다면 API를 호출합니다.
-    if (!node.children || node.children.length === 0) {
-      console.log(`Fetching children for node ${node.id}...`);
-      node.isLoading = true;
-      node.children = await fetchNodes(node.id);
-      node.isLoading = false;
-      console.log(`Finished fetching children for node ${node.id}. Found ${node.children.length} items.`);
+    // Search within the sensors of the current node
+    if (node.sensors && node.sensors.length > 0) {
+      const foundInSensors = node.sensors.find(sensor => sensor.id === id);
+      if (foundInSensors) return foundInSensors;
     }
   }
+  return null;
 };
 
-const updateNodeInTree = (nodes, id, updates) => {
-  for (const node of nodes) {
-    if (node.id === id) {
-      Object.assign(node, updates);
-      return true;
+const countVisibleDescendants = (node) => {
+  if (!node.isOpen) return 0;
+  let count = (node.children?.length || 0) + (node.sensors?.length || 0);
+  if (node.children) {
+    for (const child of node.children) {
+      count += countVisibleDescendants(child);
+    }n  }
+  return count;
+};
+
+const handleToggleNode = async (nodeFromEvent) => {
+  const node = findNodeById(treeData.value, nodeFromEvent.id);
+  if (!node || node.type !== 'folder' || !node.hasChildren) return;
+
+  const parentIndex = flattenedNodes.value.findIndex(n => n.id === node.id);
+  if (parentIndex === -1) return;
+
+  // --- Close Node Logic ---
+  if (node.isOpen) {
+    const descendantCount = countVisibleDescendants(node);
+    if (descendantCount > 0) {
+      flattenedNodes.value.splice(parentIndex + 1, descendantCount);
     }
-    if (node.children && node.children.length > 0) {
-      if (updateNodeInTree(node.children, id, updates)) return true;
+    node.isOpen = false;
+    flattenedNodes.value[parentIndex] = { ...node }; // Update node state in flat list
+    return;
+  }
+
+  // --- Open Node Logic ---
+  node.isOpen = true;
+  // Only fetch if children are not loaded yet
+  if (!node.children || node.children.length === 0 && !node.sensors || node.sensors.length === 0) {
+    node.isLoading = true;
+    flattenedNodes.value[parentIndex] = { ...node }; // Show loading indicator
+
+    const fetchedItems = await fetchNodes(node.id);
+    node.children = fetchedItems.filter(item => item.type === 'folder');
+    node.sensors = fetchedItems.filter(item => item.type === 'sensor');
+  }
+
+  node.isLoading = false;
+  const itemsToInsert = [...(node.children || []), ...(node.sensors || [])].map(item => ({ ...item, _depth: node._depth + 1 }));
+  if (itemsToInsert.length > 0) {
+    flattenedNodes.value.splice(parentIndex + 1, 0, ...itemsToInsert);
+  }
+  flattenedNodes.value[parentIndex] = { ...node }; // Update final state
+};
+
+const flattenTreeForReveal = (nodes, depth = 0) => {
+  let result = [];
+  for (const node of nodes) {
+    const nodeWithDepth = { ...node, _depth: depth };
+    result.push(nodeWithDepth);
+    if (node.isOpen) {
+      const children = node.children || [];
+      const sensors = node.sensors || [];
+      result = result.concat(flattenTreeForReveal(children, depth + 1));
+      sensors.forEach(sensor => result.push({ ...sensor, _depth: depth + 1 }));
     }
   }
-  return false;
+  return result;
+};
+
+const handleRevealPath = async (revealData) => {
+  const { path, childrenMap } = revealData;
+
+  for (const nodeInPath of path) {
+    const originalNode = findNodeById(treeData.value, nodeInPath.id);
+    if (originalNode) {
+      originalNode.isOpen = true;
+      if (childrenMap[originalNode.id]) {
+        const items = childrenMap[originalNode.id];
+        originalNode.children = items.filter(item => item.type === 'folder');
+        originalNode.sensors = items.filter(item => item.type === 'sensor');
+      }
+    }
+  }
+  flattenedNodes.value = flattenTreeForReveal(treeData.value);
 };
 
 const { wsStatus } = useWebSocket((payload) => {
-  payload.forEach(update => updateNodeInTree(treeData.value, update.id, { name: update.newName }));
+  payload.forEach(update => {
+    const node = findNodeById(treeData.value, update.id);
+    if (node) {
+      node.name = update.newName;
+      const flatNodeIndex = flattenedNodes.value.findIndex(n => n.id === update.id);
+      if (flatNodeIndex > -1) {
+        flattenedNodes.value[flatNodeIndex] = { ...flattenedNodes.value[flatNodeIndex], name: update.newName };
+      }
+    }
+  });
 });
 
 const {
@@ -154,12 +228,29 @@ const {
   searchStatusOverlay,
   handleSearch,
   selectItem,
-} = useTreeSearch(treeData, handleToggleNode);
+} = useTreeSearch(treeData, handleToggleNode, virtualTreeRef, handleRevealPath);
 
 onMounted(async () => {
-  isLoadingRoot.value = true;
-  treeData.value = await fetchNodes();
-  isLoadingRoot.value = false;
+  try {
+    console.log('[onMounted] 1. Start initialization...');
+    isLoadingRoot.value = true;
+
+    console.log('[onMounted] 2. Fetching root nodes...');
+    const rootNodes = await fetchNodes();
+    console.log(`[onMounted] 3. Fetched ${rootNodes.length} root nodes.`);
+
+    console.log('[onMounted] 4. Populating treeData...');
+    treeData.value = rootNodes.map(node => ({ ...node, _depth: 0 }));
+
+    console.log('[onMounted] 5. Populating flattenedNodes...');
+    flattenedNodes.value = [...treeData.value];
+
+    console.log('[onMounted] 6. Initialization complete. Setting isLoadingRoot to false.');
+    isLoadingRoot.value = false;
+  } catch (error) {
+    console.error('[onMounted] CRITICAL ERROR during initialization:', error);
+    isLoadingRoot.value = false; // Stop loading even if there is an error
+  }
 });
 </script>
 

@@ -1,8 +1,7 @@
 import { ref } from 'vue';
+import { useRuntimeConfig } from '#app';
 
-const API_BASE_URL = 'http://localhost:8080';
-
-export function useTreeSearch(treeData, onToggleNode) {
+export function useTreeSearch(treeData, onToggleNode, virtualTreeRef, onRevealPath) {
   const searchQuery = ref('');
   const isSearching = ref(false);
   const searchStatus = ref('');
@@ -11,61 +10,37 @@ export function useTreeSearch(treeData, onToggleNode) {
   const modalResults = ref([]);
   const searchStatusOverlay = ref(false);
 
-  const revealNodeInTree = async (path) => {
-    let currentLevelNodes = treeData.value;
-    for (const pathNode of path.slice(0, -1)) {
-      let nodeInTree = currentLevelNodes.find(n => n.id === pathNode.id);
-      if (nodeInTree) {
-        if (!nodeInTree.isOpen) {
-          await onToggleNode(nodeInTree);
-          await new Promise(resolve => {
-            const interval = setInterval(() => {
-              if (!nodeInTree.isLoading) {
-                clearInterval(interval);
-                resolve();
-              }
-            }, 50);
-          });
-        }
-        currentLevelNodes = nodeInTree.children;
-      }
-    }
-  };
-
   const selectItem = async (item) => {
     isModalOpen.value = false;
     searchStatus.value = `Revealing path for "${item.name}"...`;
     searchStatusOverlay.value = true;
-    
-    await revealNodeInTree(item.path);
 
-    highlightedItemId.value = item.id;
-    setTimeout(() => {
-        const scroller = document.querySelector('.scroller');
-        const allNodes = Array.from(scroller.querySelectorAll('.tree-node'));
-        const highlightedNode = allNodes.find(el => {
-          // This is a bit of a hack since vue-virtual-scroller reuses DOM nodes.
-          // We find the node that currently represents our highlighted item.
-          const itemWrapper = el.parentElement;
-          const itemIndex = parseInt(itemWrapper.getAttribute('data-index'), 10);
-          const vm = scroller.__vue__;
-          if (vm) {
-            const flattenedNodes = vm.items; // Access internal items
-            return flattenedNodes[itemIndex]?.id === item.id;
-          }
-          return false;
-        });
+    try {
+      const response = await fetch(`${useRuntimeConfig().public.apiBaseUrl}/api/reveal-path/${item.id}`);
+      if (!response.ok) throw new Error('Reveal path request failed');
+      const revealData = await response.json();
 
-        if (highlightedNode) {
-          highlightedNode.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      await onRevealPath(revealData);
+
+      highlightedItemId.value = item.id;
+
+      setTimeout(() => {
+        if (virtualTreeRef.value) {
+          virtualTreeRef.value.scrollToNode(item.id);
         }
-    }, 500); // Wait a bit longer for DOM to be fully ready
+      }, 100);
 
-    setTimeout(() => {
-      highlightedItemId.value = null;
-      searchStatusOverlay.value = false;
-    }, 2500);
+    } catch (error) {
+      console.error('Reveal path error:', error);
+      searchStatus.value = 'An error occurred while revealing the path.';
+    } finally {
+        setTimeout(() => {
+            highlightedItemId.value = null;
+            searchStatusOverlay.value = false;
+        }, 2500);
+    }
   };
+
 
   const handleSearch = async () => {
     if (!searchQuery.value.trim()) return;
