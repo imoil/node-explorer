@@ -1,0 +1,1 @@
+export { default } from "file:///home/imoil/repo/web-projects/vuejs-node-explorer/node_modules/@nuxt/vite-builder/dist/runtime/client.manifest.mjs"
