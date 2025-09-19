@@ -5,259 +5,218 @@
         <div class="max-w-4xl mx-auto">
           <TheHeader />
 
-          <!-- Search Form -->
           <form @submit.prevent="handleSearch" class="mb-6">
             <v-text-field
+              ref="searchInputRef"
               v-model="searchQuery"
-              label="Search nodes or sensors and press Enter..."
               variant="solo"
               prepend-inner-icon="mdi-magnify"
               hide-details
               :loading="isSearching"
               :disabled="isSearching"
-            />
+              @focus="onSearchFocus"
+              @blur="handleSearchBlur"
+              @keydown.esc="deactivateSearchInput"
+              clearable
+            >
+              <template v-slot:label>
+                Search nodes or sensors
+                <span class="kbd-shortcut">f</span>
+              </template>
+            </v-text-field>
           </form>
 
-          <!-- Tree View Container -->
           <v-card flat border>
             <v-toolbar flat density="compact">
-               <v-toolbar-title class="text-body-2">
-                System Explorer
-              </v-toolbar-title>
-              <v-spacer></v-spacer>
-              <div class="d-flex align-center text-body-2 mr-4">
-                <v-icon :color="wsStatus === 'Connected' ? 'green' : 'red'" icon="mdi-circle" size="x-small" class="mr-2"></v-icon>
-                WebSocket: {{ wsStatus }}
-              </div>
+               <v-toolbar-title class="text-body-2 d-flex align-center">
+                 <span>System Explorer</span>
+                 <span class="kbd-shortcut">t</span>
+               </v-toolbar-title>
+               <v-spacer></v-spacer>
+               <div class="d-flex align-center text-body-2 mr-4">
+                 <v-icon :color="wsStatus === 'Connected' ? 'green' : 'red'" icon="mdi-circle" size="x-small" class="mr-2"></v-icon>
+                 WebSocket: {{ wsStatus }}
+               </div>
             </v-toolbar>
             <v-divider></v-divider>
             
             <v-card-text class="pa-0" style="height: 70vh; overflow-y: auto;">
-              <!-- Loading State -->
-              <div v-if="isLoadingRoot" class="d-flex flex-column align-center justify-center h-100">
-                <v-progress-circular indeterminate size="64" color="primary"></v-progress-circular>
-                <p class="mt-4 text-grey">Loading Root Nodes...</p>
-              </div>
-              
-              <!-- Tree View Component -->
               <VirtualTree
-                v-else-if="flattenedNodes.length > 0"
                 ref="virtualTreeRef"
-                :nodes="flattenedNodes"
                 :highlight-id="highlightedItemId"
-                @toggle-node="handleToggleNode"
+                :is-search-active="isSearchActive"
+                @sensor-selected="handleSensorSelect"
               />
-
-              <!-- No Data State -->
-              <div v-else class="d-flex flex-column align-center justify-center h-100">
-                  <v-icon size="64" color="grey-darken-1">mdi-database-off-outline</v-icon>
-                  <p class="mt-4 text-grey">Failed to load data from the server.</p>
-              </div>
             </v-card-text>
 
-            <!-- Search Status Overlay -->
-            <v-overlay v-model="searchStatusOverlay" scrim="#000" class="d-flex align-center justify-center" persistent>
-               <div class="d-flex flex-column align-center text-center pa-4">
-                 <v-progress-circular v-if="isSearching" indeterminate size="48" class="mb-4"></v-progress-circular>
-                 <p>{{ searchStatus }}</p>
+            <v-overlay v-model="searchStatusOverlay" scrim="#000" class="d-flex align-center justify-center">
+               <div class="d-flex flex-column align-center text-center pa-4 bg-grey-darken-4 rounded-lg pa-8">
+                 <div v-if="isSearching">
+                   <v-progress-circular indeterminate size="48" class="mb-4"></v-progress-circular>
+                   <p>{{ searchStatus }}</p>
+                 </div>
+                 <div v-else-if="noResultsFound">
+                    <v-icon size="64" class="mb-4" color="grey-lighten-1">mdi-magnify-close</v-icon>
+                    <p class="text-h6">{{ searchStatus }}</p>
+                 </div>
+                 <div v-else-if="singleResultFound">
+                    <v-icon size="64" class="mb-4" color="success">mdi-check-circle-outline</v-icon>
+                    <p class="text-h6">{{ searchStatus }}</p>
+                 </div>
+                 <p v-else>{{ searchStatus }}</p>
                </div>
             </v-overlay>
+
+            <v-overlay v-model="isSensorMessageVisible" scrim="#000" class="d-flex align-center justify-center">
+              <div class="d-flex flex-column align-center text-center pa-4 bg-grey-darken-4 rounded-lg pa-8">
+                <v-icon size="64" class="mb-4" color="info">mdi-information-outline</v-icon>
+                <p class="text-h6">{{ sensorMessage }}</p>
+              </div>
+            </v-overlay>
+
           </v-card>
         </div>
       </v-container>
     </v-main>
 
-    <!-- Search Results Modal Component -->
     <SearchResultsModal
       v-model="isModalOpen"
       :results="modalResults"
+      :search-query="searchedQuery"
       @select-item="selectItem"
+      @cancel="restoreTreeFocus"
     />
   </v-app>
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted } from 'vue';
+import { ref, onMounted, onUnmounted, watch } from 'vue';
 import TheHeader from '~/components/TheHeader.vue';
 import VirtualTree from '~/components/VirtualTree.vue';
 import SearchResultsModal from '~/components/SearchResultsModal.vue';
 import { useWebSocket } from '~/composables/useWebSocket';
 import { useTreeSearch } from '~/composables/useTreeSearch';
 
-import { useRuntimeConfig } from '#app';
+const MESSAGE_DISPLAY_TIME = 1000;
 
-const config = useRuntimeConfig();
-const API_BASE_URL = config.public.apiBaseUrl;
-const treeData = ref([]);
-const flattenedNodes = ref([]);
-const isLoadingRoot = ref(true);
 const virtualTreeRef = ref(null);
+const searchInputRef = ref(null);
+const lastFocusedIndex = ref(0);
+const isSearchActive = ref(false);
 
-const fetchNodes = async (id = null) => {
-  try {
-    const url = id ? `${API_BASE_URL}/api/nodes/${id}/children` : `${API_BASE_URL}/api/nodes/root`;
-    const response = await fetch(url);
-    if (!response.ok) throw new Error(`Network response was not ok for url: ${url}`);
-    const data = await response.json();
-    // 백엔드에서 받은 데이터에 프론트엔드 상태값을 추가합니다.
-    return data.map(node => ({ ...node, children: [], isOpen: false, isLoading: false }));
-  } catch (error) {
-    console.error("Failed to fetch nodes:", error);
-    return [];
+const isSensorMessageVisible = ref(false);
+const sensorMessage = ref('');
+let sensorMessageTimer = null;
+
+// --- Search ---
+const {
+  searchQuery, searchedQuery, isSearching, searchStatus, highlightedItemId,
+  isModalOpen, modalResults, searchStatusOverlay, noResultsFound,
+  singleResultFound, handleSearch, selectItem,
+} = useTreeSearch(virtualTreeRef);
+
+// --- Focus Management ---
+const onSearchFocus = () => {
+  isSearchActive.value = true;
+  if (virtualTreeRef.value) {
+    lastFocusedIndex.value = virtualTreeRef.value.getFocusedIndex();
   }
 };
 
-const findNodeById = (nodes, id) => {
-  for (const node of nodes) {
-    if (node.id === id) return node;
+const handleSearchBlur = () => {
+  if (searchStatusOverlay.value || isModalOpen.value) return;
+  isSearchActive.value = false;
+};
 
-    // Search within the children of the current node
-    if (node.children && node.children.length > 0) {
-      const foundInChildren = findNodeById(node.children, id);
-      if (foundInChildren) return foundInChildren;
-    }
+const deactivateSearchInput = () => {
+  searchInputRef.value?.$el.querySelector('input')?.blur();
+};
 
-    // Search within the sensors of the current node
-    if (node.sensors && node.sensors.length > 0) {
-      const foundInSensors = node.sensors.find(sensor => sensor.id === id);
-      if (foundInSensors) return foundInSensors;
-    }
+const restoreTreeFocus = () => {
+  isSearchActive.value = false;
+  if (virtualTreeRef.value) {
+    virtualTreeRef.value.setFocusByIndex(lastFocusedIndex.value);
   }
-  return null;
 };
 
-const countVisibleDescendants = (node) => {
-  if (!node.isOpen) return 0;
-  let count = (node.children?.length || 0) + (node.sensors?.length || 0);
-  if (node.children) {
-    for (const child of node.children) {
-      count += countVisibleDescendants(child);
-    }n  }
-  return count;
+watch(searchStatusOverlay, (isShowing, wasShowing) => {
+  if (wasShowing && !isShowing && noResultsFound.value) {
+    restoreTreeFocus();
+  }
+});
+
+// --- WebSocket ---
+const { wsStatus } = useWebSocket((payload) => {
+  if (virtualTreeRef.value) {
+    payload.forEach(update => {
+      virtualTreeRef.value.updateNodeName(update);
+    });
+  }
+});
+
+// --- Sensor Selection ---
+const handleSensorSelect = (sensorNode) => {
+  sensorMessage.value = `Sensor '${sensorNode.name}' selected.`;
+  isSensorMessageVisible.value = true;
+  clearTimeout(sensorMessageTimer);
+  sensorMessageTimer = setTimeout(() => {
+    isSensorMessageVisible.value = false;
+  }, MESSAGE_DISPLAY_TIME);
 };
 
-const handleToggleNode = async (nodeFromEvent) => {
-  const node = findNodeById(treeData.value, nodeFromEvent.id);
-  if (!node || node.type !== 'folder' || !node.hasChildren) return;
-
-  const parentIndex = flattenedNodes.value.findIndex(n => n.id === node.id);
-  if (parentIndex === -1) return;
-
-  // --- Close Node Logic ---
-  if (node.isOpen) {
-    const descendantCount = countVisibleDescendants(node);
-    if (descendantCount > 0) {
-      flattenedNodes.value.splice(parentIndex + 1, descendantCount);
-    }
-    node.isOpen = false;
-    flattenedNodes.value[parentIndex] = { ...node }; // Update node state in flat list
+// --- Global Hotkeys ---
+const handleGlobalKeydown = (event: KeyboardEvent) => {
+  const target = event.target as HTMLElement;
+  if (['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName)) {
     return;
   }
 
-  // --- Open Node Logic ---
-  node.isOpen = true;
-  // Only fetch if children are not loaded yet
-  if (!node.children || node.children.length === 0 && !node.sensors || node.sensors.length === 0) {
-    node.isLoading = true;
-    flattenedNodes.value[parentIndex] = { ...node }; // Show loading indicator
-
-    const fetchedItems = await fetchNodes(node.id);
-    node.children = fetchedItems.filter(item => item.type === 'folder');
-    node.sensors = fetchedItems.filter(item => item.type === 'sensor');
+  if (event.key === 'f') {
+    event.preventDefault();
+    searchInputRef.value?.$el.querySelector('input')?.focus();
   }
 
-  node.isLoading = false;
-  const itemsToInsert = [...(node.children || []), ...(node.sensors || [])].map(item => ({ ...item, _depth: node._depth + 1 }));
-  if (itemsToInsert.length > 0) {
-    flattenedNodes.value.splice(parentIndex + 1, 0, ...itemsToInsert);
-  }
-  flattenedNodes.value[parentIndex] = { ...node }; // Update final state
-};
-
-const flattenTreeForReveal = (nodes, depth = 0) => {
-  let result = [];
-  for (const node of nodes) {
-    const nodeWithDepth = { ...node, _depth: depth };
-    result.push(nodeWithDepth);
-    if (node.isOpen) {
-      const children = node.children || [];
-      const sensors = node.sensors || [];
-      result = result.concat(flattenTreeForReveal(children, depth + 1));
-      sensors.forEach(sensor => result.push({ ...sensor, _depth: depth + 1 }));
+  if (event.key === 't') {
+    event.preventDefault();
+    if (virtualTreeRef.value) {
+      isSearchActive.value = false;
+      // 부모는 자식에게 포커스하라고 명령만 내리면 됩니다.
+      // 자식이 자신의 현재 포커스 위치를 알고 있으므로 그 위치에 다시 포커스합니다.
+      virtualTreeRef.value.focus();
     }
   }
-  return result;
 };
 
-const handleRevealPath = async (revealData) => {
-  const { path, childrenMap } = revealData;
-
-  for (const nodeInPath of path) {
-    const originalNode = findNodeById(treeData.value, nodeInPath.id);
-    if (originalNode) {
-      originalNode.isOpen = true;
-      if (childrenMap[originalNode.id]) {
-        const items = childrenMap[originalNode.id];
-        originalNode.children = items.filter(item => item.type === 'folder');
-        originalNode.sensors = items.filter(item => item.type === 'sensor');
-      }
-    }
-  }
-  flattenedNodes.value = flattenTreeForReveal(treeData.value);
-};
-
-const { wsStatus } = useWebSocket((payload) => {
-  payload.forEach(update => {
-    const node = findNodeById(treeData.value, update.id);
-    if (node) {
-      node.name = update.newName;
-      const flatNodeIndex = flattenedNodes.value.findIndex(n => n.id === update.id);
-      if (flatNodeIndex > -1) {
-        flattenedNodes.value[flatNodeIndex] = { ...flattenedNodes.value[flatNodeIndex], name: update.newName };
-      }
-    }
-  });
+onMounted(() => {
+  window.addEventListener('keydown', handleGlobalKeydown);
 });
 
-const {
-  searchQuery,
-  isSearching,
-  searchStatus,
-  highlightedItemId,
-  isModalOpen,
-  modalResults,
-  searchStatusOverlay,
-  handleSearch,
-  selectItem,
-} = useTreeSearch(treeData, handleToggleNode, virtualTreeRef, handleRevealPath);
-
-onMounted(async () => {
-  try {
-    console.log('[onMounted] 1. Start initialization...');
-    isLoadingRoot.value = true;
-
-    console.log('[onMounted] 2. Fetching root nodes...');
-    const rootNodes = await fetchNodes();
-    console.log(`[onMounted] 3. Fetched ${rootNodes.length} root nodes.`);
-
-    console.log('[onMounted] 4. Populating treeData...');
-    treeData.value = rootNodes.map(node => ({ ...node, _depth: 0 }));
-
-    console.log('[onMounted] 5. Populating flattenedNodes...');
-    flattenedNodes.value = [...treeData.value];
-
-    console.log('[onMounted] 6. Initialization complete. Setting isLoadingRoot to false.');
-    isLoadingRoot.value = false;
-  } catch (error) {
-    console.error('[onMounted] CRITICAL ERROR during initialization:', error);
-    isLoadingRoot.value = false; // Stop loading even if there is an error
-  }
+onUnmounted(() => {
+  window.removeEventListener('keydown', handleGlobalKeydown);
 });
+
 </script>
 
 <style>
 .vue-recycle-scroller__item-wrapper, .vue-recycle-scroller__item-view {
   box-sizing: border-box;
 }
-</style>
 
+.kbd-shortcut {
+  background-color: #4f4f4f;
+  border: 1px solid #666;
+  border-bottom-width: 2px;
+  border-radius: 4px;
+  padding: 2px 6px;
+  font-family: monospace;
+  font-size: 0.8em;
+  font-weight: bold;
+  color: #e0e0e0;
+  box-shadow: 0px 1px 1px #222;
+  margin-left: 8px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 1;
+}
+</style>

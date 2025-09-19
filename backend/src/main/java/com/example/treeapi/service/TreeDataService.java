@@ -14,6 +14,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.util.*;
 import java.util.stream.Collectors;
+import java.util.stream.Stream;
 
 @Service
 public class TreeDataService {
@@ -28,8 +29,9 @@ public class TreeDataService {
     @Transactional
     public void initializeMockData() {
         // Clear existing data
-        nodeRepository.deleteAll();
         sensorRepository.deleteAll();
+        nodeRepository.deleteAll();
+
 
         // Root Nodes
         Node manufacturing = createNode("node-1", "Manufacturing (53)", null, true, Map.of("owner", "Alice", "last_updated", "2025-09-18"));
@@ -66,6 +68,7 @@ public class TreeDataService {
         Sensor sensor = new Sensor();
         sensor.setId(id);
         sensor.setName(name);
+        sensor.setType("sensor");
         sensor.setNode(parentNode);
         sensor.setMetadata(metadata);
         sensorRepository.save(sensor);
@@ -93,6 +96,7 @@ public class TreeDataService {
                         dto.setId(sensor.getId());
                         dto.setName(sensor.getName());
                         dto.setType("sensor");
+                        dto.setHasChildren(false);
                         dto.setMetadata(sensor.getMetadata());
                         return dto;
                     })
@@ -103,18 +107,54 @@ public class TreeDataService {
         return children;
     }
 
+    /**
+     * Node와 Sensor 모두에서 이름과 메타데이터 속성으로 검색을 수행합니다.
+     */
     @Transactional(readOnly = true)
     public List<SearchResultDto> searchNodes(String query) {
-        return nodeRepository.findByNameContainingIgnoreCase(query).stream()
-                .map(node -> new SearchResultDto(node.getId(), node.getName(), node.getType(), findPathToNode(node.getId())))
-                .collect(Collectors.toList());
+        // 이름으로 검색 + 속성으로 검색 후 중복 제거
+        List<Node> matchingNodes = Stream.concat(
+            nodeRepository.findByNameContainingIgnoreCase(query).stream(),
+            nodeRepository.findByMetadataValueContainingIgnoreCase(query).stream()
+        ).distinct().collect(Collectors.toList());
+
+        List<Sensor> matchingSensors = Stream.concat(
+            sensorRepository.findByNameContainingIgnoreCase(query).stream(),
+            sensorRepository.findByMetadataValueContainingIgnoreCase(query).stream()
+        ).distinct().collect(Collectors.toList());
+
+        // 검색 결과를 DTO로 변환
+        Stream<SearchResultDto> nodeResults = matchingNodes.stream()
+            .map(node -> new SearchResultDto(node.getId(), node.getName(), node.getType(), findPathToNode(node.getId())));
+
+        Stream<SearchResultDto> sensorResults = matchingSensors.stream()
+            .map(sensor -> new SearchResultDto(sensor.getId(), sensor.getName(), sensor.getType(), findPathToNode(sensor.getId())));
+
+        // Node와 Sensor 검색 결과를 합쳐서 반환
+        return Stream.concat(nodeResults, sensorResults).collect(Collectors.toList());
     }
 
+    /**
+     * ID를 기반으로 Node 또는 Sensor의 경로를 찾습니다.
+     * Sensor ID가 주어지면 부모 Node의 경로를 반환합니다.
+     */
     @Transactional(readOnly = true)
-    public List<NodeDto> findPathToNode(String nodeId) {
+    public List<NodeDto> findPathToNode(String itemId) {
         LinkedList<NodeDto> path = new LinkedList<>();
-        Optional<Node> currentNodeOpt = nodeRepository.findById(nodeId);
+        Optional<Node> startNodeOpt;
 
+        // itemId가 Node인지 확인
+        Optional<Node> nodeAsNode = nodeRepository.findById(itemId);
+        if (nodeAsNode.isPresent()) {
+            startNodeOpt = nodeAsNode;
+        } else {
+            // Node가 아니라면 Sensor인지 확인하고, 맞다면 부모 Node를 경로의 시작점으로 설정
+            Optional<Sensor> sensorAsSensor = sensorRepository.findById(itemId);
+            startNodeOpt = sensorAsSensor.map(Sensor::getNode);
+        }
+
+        // 경로의 시작점이 정해졌으면, 최상위 부모까지 경로를 재구성
+        Optional<Node> currentNodeOpt = startNodeOpt;
         while (currentNodeOpt.isPresent()) {
             Node currentNode = currentNodeOpt.get();
             path.addFirst(new NodeDto(currentNode));
@@ -126,6 +166,7 @@ public class TreeDataService {
         }
         return path;
     }
+
 
     @Transactional(readOnly = true)
     public RevealPathDto revealPath(String nodeId) {
