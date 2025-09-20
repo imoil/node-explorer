@@ -34,24 +34,18 @@
                </v-toolbar-title>
                <v-spacer></v-spacer>
                <div class="d-flex align-center text-body-2 mr-4">
-                 <v-icon :color="wsStatus === 'Connected' ? 'green' : 'red'" icon="mdi-circle" size="x-small" class="mr-2"></v-icon>
-                 WebSocket: {{ wsStatus }}
+                 (Press <span class="kbd-shortcut">r</span> to refresh)
                </div>
             </v-toolbar>
             <v-divider></v-divider>
             
             <v-card-text class="pa-0" style="height: 70vh; overflow-y: auto;">
-              <VirtualTree
-                ref="virtualTreeRef"
-                :highlight-id="highlightedItemId"
-                :is-search-active="isSearchActive"
-                @sensor-selected="handleSensorSelect"
-              />
+              <VirtualTree @sensor-selected="handleSensorSelect" />
             </v-card-text>
 
             <v-overlay v-model="searchStatusOverlay" scrim="#000" class="d-flex align-center justify-center">
                <div class="d-flex flex-column align-center text-center pa-4 bg-grey-darken-4 rounded-lg pa-8">
-                 <div v-if="isSearching">
+                 <div v-if="isSearching || isRefreshing">
                    <v-progress-circular indeterminate size="48" class="mb-4"></v-progress-circular>
                    <p>{{ searchStatus }}</p>
                  </div>
@@ -75,45 +69,59 @@
             </v-overlay>
 
           </v-card>
+
+          <SearchResultsModal
+            v-model="isModalOpen"
+            :results="modalResults"
+            :search-query="searchedQuery"
+            @select-item="selectItem"
+            @cancel="restoreTreeFocus"
+          />
         </div>
       </v-container>
     </v-main>
-
-    <SearchResultsModal
-      v-model="isModalOpen"
-      :results="modalResults"
-      :search-query="searchedQuery"
-      @select-item="selectItem"
-      @cancel="restoreTreeFocus"
-    />
   </v-app>
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, onUnmounted, watch } from 'vue';
+import { ref, onMounted, onUnmounted, watch, nextTick } from 'vue';
+import { storeToRefs } from 'pinia';
 import TheHeader from '~/components/TheHeader.vue';
 import VirtualTree from '~/components/VirtualTree.vue';
 import SearchResultsModal from '~/components/SearchResultsModal.vue';
-import { useWebSocket } from '~/composables/useWebSocket';
-import { useTreeSearch } from '~/composables/useTreeSearch';
+import { useTreeStore } from '~/stores/tree';
 
 const MESSAGE_DISPLAY_TIME = 1000;
 
-const virtualTreeRef = ref(null);
-const searchInputRef = ref(null);
-const lastFocusedIndex = ref(0);
-const isSearchActive = ref(false);
-
+const searchInputRef = ref<any>(null);
 const isSensorMessageVisible = ref(false);
 const sensorMessage = ref('');
-let sensorMessageTimer = null;
+let sensorMessageTimer: NodeJS.Timeout | null = null;
 
-// --- Search ---
+const store = useTreeStore();
 const {
-  searchQuery, searchedQuery, isSearching, searchStatus, highlightedItemId,
-  isModalOpen, modalResults, searchStatusOverlay, noResultsFound,
-  singleResultFound, handleSearch, selectItem,
-} = useTreeSearch(virtualTreeRef);
+  // State
+  searchQuery,
+  searchedQuery,
+  isSearching,
+  isRefreshing,
+  searchStatus,
+  isModalOpen,
+  modalResults,
+  searchStatusOverlay,
+  noResultsFound,
+  singleResultFound,
+  isSearchActive,
+  lastFocusedIndex,
+  virtualTreeRef,
+} = storeToRefs(store);
+
+const {
+  // Actions
+  handleSearch,
+  selectItem,
+  refreshExpandedNodes,
+} = store;
 
 // --- Focus Management ---
 const onSearchFocus = () => {
@@ -132,8 +140,9 @@ const deactivateSearchInput = () => {
   searchInputRef.value?.$el.querySelector('input')?.blur();
 };
 
-const restoreTreeFocus = () => {
+const restoreTreeFocus = async () => {
   isSearchActive.value = false;
+  await nextTick();
   if (virtualTreeRef.value) {
     virtualTreeRef.value.setFocusByIndex(lastFocusedIndex.value);
   }
@@ -145,20 +154,11 @@ watch(searchStatusOverlay, (isShowing, wasShowing) => {
   }
 });
 
-// --- WebSocket ---
-const { wsStatus } = useWebSocket((payload) => {
-  if (virtualTreeRef.value) {
-    payload.forEach(update => {
-      virtualTreeRef.value.updateNodeName(update);
-    });
-  }
-});
-
 // --- Sensor Selection ---
-const handleSensorSelect = (sensorNode) => {
+const handleSensorSelect = (sensorNode: { name: string }) => {
   sensorMessage.value = `Sensor '${sensorNode.name}' selected.`;
   isSensorMessageVisible.value = true;
-  clearTimeout(sensorMessageTimer);
+  if (sensorMessageTimer) clearTimeout(sensorMessageTimer);
   sensorMessageTimer = setTimeout(() => {
     isSensorMessageVisible.value = false;
   }, MESSAGE_DISPLAY_TIME);
@@ -180,10 +180,13 @@ const handleGlobalKeydown = (event: KeyboardEvent) => {
     event.preventDefault();
     if (virtualTreeRef.value) {
       isSearchActive.value = false;
-      // 부모는 자식에게 포커스하라고 명령만 내리면 됩니다.
-      // 자식이 자신의 현재 포커스 위치를 알고 있으므로 그 위치에 다시 포커스합니다.
       virtualTreeRef.value.focus();
     }
+  }
+
+  if (event.key === 'r') {
+    event.preventDefault();
+    refreshExpandedNodes();
   }
 };
 
@@ -194,7 +197,6 @@ onMounted(() => {
 onUnmounted(() => {
   window.removeEventListener('keydown', handleGlobalKeydown);
 });
-
 </script>
 
 <style>

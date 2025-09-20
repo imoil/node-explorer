@@ -1,0 +1,182 @@
+# application.yml (공통 설정)
+spring:
+  application:
+    name: tree-api
+  profiles:
+    active: ${SPRING_PROFILES_ACTIVE:dev}
+
+  jpa:
+    open-in-view: false
+    properties:
+      hibernate:
+        # Oracle 11g 호환성을 위한 네이밍 전략 (prod 프로필에서만 필요하지만, dev/test에 영향을 주지 않음)
+        physical_naming_strategy: org.hibernate.boot.model.naming.PhysicalNamingStrategyStandardImpl
+        implicit_naming_strategy: org.hibernate.boot.model.naming.ImplicitNamingStrategyLegacyJpaImpl
+        # ID 생성 전략 (prod 프로필에서만 필요)
+        id.new_generator_mappings: false
+
+# 공통 앱 설정
+app:
+  websocket:
+    max-sessions: 1000
+    batch-size: 50
+    batch-interval: 100ms
+  search:
+    max-results: 1000
+    max-query-length: 100
+  security:
+    rate-limit:
+      requests-per-minute: 100
+
+# Cache 설정
+cache:
+  time-to-live: 300 # 5분
+  max-entries: 1000
+
+---
+# application-dev.yml (개발 환경)
+spring:
+  config:
+    activate:
+      on-profile: dev
+
+  datasource:
+    # H2를 Oracle 모드로 실행
+    url: jdbc:h2:mem:devdb;MODE=Oracle;DATABASE_TO_LOWER=FALSE;DEFAULT_NULL_ORDERING=HIGH
+    driver-class-name: org.h2.Driver
+    username: sa
+    password: ""
+
+  h2:
+    console:
+      enabled: true
+      path: /h2-console
+
+  jpa:
+    hibernate:
+      # 서버 실행 시 스키마를 생성하고, 종료 시 삭제
+      ddl-auto: create-drop
+    show-sql: true
+    properties:
+      hibernate:
+        dialect: org.hibernate.dialect.H2Dialect # H2 Dialect 명시
+        format_sql: true
+        use_sql_comments: true
+
+# 로깅 설정
+logging:
+  level:
+    com.example.treeapi: DEBUG
+    org.springframework.web: DEBUG
+    org.hibernate.SQL: DEBUG
+    org.hibernate.type.descriptor.sql.BasicBinder: TRACE
+
+app:
+  cors:
+    allowed-origins:
+      - "http://localhost:3000"
+      - "http://localhost:5173"
+      - "http://127.0.0.1:3000"
+
+---
+# application-prod.yml (프로덕션 환경)
+spring:
+  config:
+    activate:
+      on-profile: prod
+
+  datasource:
+    url: ${DATABASE_URL}
+    driver-class-name: oracle.jdbc.OracleDriver
+    username: ${DATABASE_USERNAME}
+    password: ${DATABASE_PASSWORD}
+    type: oracle.ucp.jdbc.PoolDataSource # 데이터소스 타입으로 UCP 지정
+
+    # Spring Boot 표준 UCP 설정
+    ucp:
+      pool-name: OracleUCPool
+      initial-pool-size: 5
+      min-pool-size: 5
+      max-pool-size: 20
+      connection-timeout: 30
+      inactive-connection-timeout: 600
+      max-connection-reuse-time: 1800
+      time-to-live-connection-timeout: 1800
+      connection-wait-timeout: 10
+      validate-connection-on-borrow: true
+      sql-for-validate-connection: "SELECT 1 FROM DUAL"
+
+  jpa:
+    hibernate:
+      # 프로덕션에서는 스키마 검증만 수행 (Flyway 등으로 관리)
+      ddl-auto: validate
+    show-sql: false
+    properties:
+      hibernate:
+        dialect: org.hibernate.dialect.Oracle10gDialect # Oracle Dialect 명시
+        jdbc:
+          batch_size: 25
+        order_inserts: true
+        order_updates: true
+        # LOB 생성 관련 호환성 설정
+        jdbc.lob.non_contextual_creation: true
+
+logging:
+  level:
+    com.example.treeapi: INFO
+    org.springframework.security: WARN
+    oracle.jdbc: WARN
+  pattern:
+    console: "%d{yyyy-MM-dd HH:mm:ss} - %msg%n"
+    file: "%d{yyyy-MM-dd HH:mm:ss} [%thread] %-5level %logger{36} - %msg%n"
+  file:
+    name: /var/log/tree-api/application.log
+
+app:
+  cors:
+    allowed-origins: ${ALLOWED_ORIGINS}
+  security:
+    jwt:
+      secret: ${JWT_SECRET}
+      expiration: 86400000 # 24 hours
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics,prometheus,flyway
+  endpoint:
+    health:
+      show-details: when-authorized
+    flyway:
+      enabled: true
+  metrics:
+    export:
+      prometheus:
+        enabled: true
+
+---
+# application-test.yml (테스트 환경 - H2 Oracle 모드)
+spring:
+  config:
+    activate:
+      on-profile: test
+
+  datasource:
+    # 테스트 실행 동안 DB 유지
+    url: jdbc:h2:mem:testdb;MODE=Oracle;DATABASE_TO_LOWER=FALSE;DEFAULT_NULL_ORDERING=HIGH;DB_CLOSE_DELAY=-1;DB_CLOSE_ON_EXIT=FALSE
+    driver-class-name: org.h2.Driver
+    username: sa
+    password: ""
+
+  jpa:
+    hibernate:
+      ddl-auto: create-drop
+    properties:
+      hibernate:
+        dialect: org.hibernate.dialect.H2Dialect
+
+logging:
+  level:
+    com.example.treeapi: DEBUG
+    org.springframework.test: DEBUG

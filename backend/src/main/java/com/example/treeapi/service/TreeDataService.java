@@ -8,6 +8,7 @@ import com.example.treeapi.dto.SearchResultDto;
 import com.example.treeapi.repository.NodeRepository;
 import com.example.treeapi.repository.SensorRepository;
 import jakarta.annotation.PostConstruct;
+import lombok.RequiredArgsConstructor;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -17,13 +18,10 @@ import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
 @Service
+@RequiredArgsConstructor
 public class TreeDataService {
-
-    @Autowired
-    private NodeRepository nodeRepository;
-
-    @Autowired
-    private SensorRepository sensorRepository;
+    private final NodeRepository nodeRepository;
+    private final SensorRepository sensorRepository;
 
     @PostConstruct
     @Transactional
@@ -31,7 +29,6 @@ public class TreeDataService {
         // Clear existing data
         sensorRepository.deleteAll();
         nodeRepository.deleteAll();
-
 
         // Root Nodes
         Node manufacturing = createNode("node-1", "Manufacturing (53)", null, true, Map.of("owner", "Alice", "last_updated", "2025-09-18"));
@@ -83,6 +80,11 @@ public class TreeDataService {
 
     @Transactional(readOnly = true)
     public List<NodeDto> getChildrenOf(String parentId) {
+        // Handle root case explicitly to avoid findById(null)
+        if (parentId == null) {
+            return getRootNodes();
+        }
+
         // Get child folders
         List<NodeDto> children = nodeRepository.findByParentId(parentId).stream()
                 .map(NodeDto::new)
@@ -173,24 +175,18 @@ public class TreeDataService {
         List<NodeDto> path = findPathToNode(nodeId);
         Map<String, List<NodeDto>> childrenMap = new HashMap<>();
 
-        // For each node in the path, get its children so the frontend can render the expanded tree
+        if (path.isEmpty()) {
+            return new RevealPathDto(Collections.emptyList(), Collections.emptyMap());
+        }
+
+        // Per the test case, only add children for nodes in the path that are not the final target.
         for (NodeDto nodeInPath : path) {
-            // We don't need the children of the final target node itself, just the path to it.
             if (!nodeInPath.getId().equals(nodeId)) {
                 childrenMap.put(nodeInPath.getId(), getChildrenOf(nodeInPath.getId()));
             }
         }
+
         return new RevealPathDto(path, childrenMap);
     }
 
-    @Transactional
-    public String updateRandomNodeName(String nodeId) {
-        return nodeRepository.findById(nodeId).map(node -> {
-            Random random = new Random();
-            String newName = node.getName().replaceAll(" \\(\\d+\\)", "") + " (" + (random.nextInt(90) + 10) + ")";
-            node.setName(newName);
-            nodeRepository.save(node);
-            return newName;
-        }).orElse(null);
-    }
 }
