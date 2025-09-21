@@ -7,186 +7,121 @@ import com.example.treeapi.dto.RevealPathDto;
 import com.example.treeapi.dto.SearchResultDto;
 import com.example.treeapi.repository.NodeRepository;
 import com.example.treeapi.repository.SensorRepository;
-import jakarta.annotation.PostConstruct;
 import lombok.RequiredArgsConstructor;
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.util.*;
+import java.util.function.Function;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
 @Service
 @RequiredArgsConstructor
+@Transactional(readOnly = true)
 public class TreeDataService {
+
     private final NodeRepository nodeRepository;
     private final SensorRepository sensorRepository;
 
-    @PostConstruct
-    @Transactional
-    public void initializeMockData() {
-        // Clear existing data
-        sensorRepository.deleteAll();
-        nodeRepository.deleteAll();
-
-        // Root Nodes
-        Node manufacturing = createNode("node-1", "Manufacturing (53)", null, true, Map.of("owner", "Alice", "last_updated", "2025-09-18"));
-        Node logistics = createNode("node-2", "Logistics (28)", null, true, Map.of("owner", "Bob", "region", "Global"));
-        Node rAndD = createNode("node-3", "R&D (15)", null, false, Map.of("budget", "$5M"));
-
-        // Level 2
-        Node factoryA = createNode("node-1-1", "Factory A (EU)", "node-1", true, Map.of("location", "Germany"));
-        Node factoryB = createNode("node-1-2", "Factory B (APAC)", "node-1", false, Map.of("location", "South Korea"));
-        Node warehouseX = createNode("node-2-1", "Warehouse X (US)", "node-2", false, Map.of("manager", "Charlie"));
-
-        // Level 3
-        Node productionLine1 = createNode("node-1-1-1", "Production Line 1 (21)", "node-1-1", false, Map.of("product", "Widget A"));
-        Node productionLine2 = createNode("node-1-1-2", "Production Line 2 (89)", "node-1-1", false, Map.of("product", "Widget B"));
-
-        // Sensors
-        createSensor("sensor-temp-1", "Temperature Sensor", factoryA, Map.of("unit", "Celsius", "value", "25.5"));
-        createSensor("sensor-humidity-1", "Humidity Sensor", factoryA, Map.of("unit", "%", "value", "60"));
-        createSensor("sensor-logistics-1", "GPS Tracker", logistics, Map.of("battery", "80%", "accuracy", "5m"));
-    }
-
-    private Node createNode(String id, String name, String parentId, boolean hasChildren, Map<String, String> metadata) {
-        Node node = new Node();
-        node.setId(id);
-        node.setName(name);
-        node.setParentId(parentId);
-        node.setHasChildren(hasChildren);
-        node.setType("folder");
-        node.setMetadata(metadata);
-        return nodeRepository.save(node);
-    }
-
-    private void createSensor(String id, String name, Node parentNode, Map<String, String> metadata) {
-        Sensor sensor = new Sensor();
-        sensor.setId(id);
-        sensor.setName(name);
-        sensor.setType("sensor");
-        sensor.setNode(parentNode);
-        sensor.setMetadata(metadata);
-        sensorRepository.save(sensor);
-    }
-
-    @Transactional(readOnly = true)
     public List<NodeDto> getRootNodes() {
-        return nodeRepository.findByParentId(null).stream()
-                .map(NodeDto::new)
+        // In the new schema, root nodes are children of a virtual node with ID 1.
+        return nodeRepository.findByParentId(1L).stream()
+                .map(this::toNodeDto)
                 .collect(Collectors.toList());
     }
 
-    @Transactional(readOnly = true)
-    public List<NodeDto> getChildrenOf(String parentId) {
-        // Handle root case explicitly to avoid findById(null)
+    public List<NodeDto> getChildrenOf(Long parentId) {
         if (parentId == null) {
             return getRootNodes();
         }
 
-        // Get child folders
-        List<NodeDto> children = nodeRepository.findByParentId(parentId).stream()
-                .map(NodeDto::new)
+        List<NodeDto> childNodes = nodeRepository.findByParentId(parentId).stream()
+                .map(this::toNodeDto)
                 .collect(Collectors.toList());
 
-        // Get attached sensors
-        nodeRepository.findById(parentId).ifPresent(parentNode -> {
-            List<NodeDto> sensors = parentNode.getSensors().stream()
-                    .map(sensor -> {
-                        NodeDto dto = new NodeDto();
-                        dto.setId(sensor.getId());
-                        dto.setName(sensor.getName());
-                        dto.setType("sensor");
-                        dto.setHasChildren(false);
-                        dto.setMetadata(sensor.getMetadata());
-                        return dto;
-                    })
+        // Since the relationship is now ManyToMany, we fetch the parent and get sensors.
+        nodeRepository.findById(parentId).ifPresent(parent -> {
+            List<NodeDto> sensorDtos = parent.getSensors().stream()
+                    .map(this::toSensorDto)
                     .collect(Collectors.toList());
-            children.addAll(sensors);
+            childNodes.addAll(sensorDtos);
         });
 
-        return children;
+        return childNodes;
     }
 
-    /**
-     * Node와 Sensor 모두에서 이름과 메타데이터 속성으로 검색을 수행합니다.
-     */
-    @Transactional(readOnly = true)
     public List<SearchResultDto> searchNodes(String query) {
-        // 이름으로 검색 + 속성으로 검색 후 중복 제거
-        List<Node> matchingNodes = Stream.concat(
-            nodeRepository.findByNameContainingIgnoreCase(query).stream(),
-            nodeRepository.findByMetadataValueContainingIgnoreCase(query).stream()
-        ).distinct().collect(Collectors.toList());
+        List<SearchResultDto> nodeResults = nodeRepository.findByNodeNameContainingIgnoreCase(query).stream()
+                .map(node -> new SearchResultDto(node.getId().toString(), node.getNodeName(), "folder", findPath(node)))
+                .collect(Collectors.toList());
 
-        List<Sensor> matchingSensors = Stream.concat(
-            sensorRepository.findByNameContainingIgnoreCase(query).stream(),
-            sensorRepository.findByMetadataValueContainingIgnoreCase(query).stream()
-        ).distinct().collect(Collectors.toList());
+        List<SearchResultDto> sensorResults = sensorRepository.findBySensorNameContainingIgnoreCase(query).stream()
+                .flatMap(sensor -> sensor.getNodes().stream()
+                        .map(node -> new SearchResultDto(sensor.getId().toString(), sensor.getSensorName(), "sensor", findPath(node))))
+                .collect(Collectors.toList());
 
-        // 검색 결과를 DTO로 변환
-        Stream<SearchResultDto> nodeResults = matchingNodes.stream()
-            .map(node -> new SearchResultDto(node.getId(), node.getName(), node.getType(), findPathToNode(node.getId())));
-
-        Stream<SearchResultDto> sensorResults = matchingSensors.stream()
-            .map(sensor -> new SearchResultDto(sensor.getId(), sensor.getName(), sensor.getType(), findPathToNode(sensor.getId())));
-
-        // Node와 Sensor 검색 결과를 합쳐서 반환
-        return Stream.concat(nodeResults, sensorResults).collect(Collectors.toList());
+        return Stream.concat(nodeResults.stream(), sensorResults.stream()).collect(Collectors.toList());
     }
 
-    /**
-     * ID를 기반으로 Node 또는 Sensor의 경로를 찾습니다.
-     * Sensor ID가 주어지면 부모 Node의 경로를 반환합니다.
-     */
-    @Transactional(readOnly = true)
-    public List<NodeDto> findPathToNode(String itemId) {
-        LinkedList<NodeDto> path = new LinkedList<>();
-        Optional<Node> startNodeOpt;
+    public RevealPathDto revealPath(Long nodeId) {
+        return nodeRepository.findById(nodeId)
+                .map(node -> {
+                    List<NodeDto> path = findPath(node);
+                    Map<String, List<NodeDto>> childrenMap = new HashMap<>();
+                    path.stream()
+                        .filter(p -> !p.getId().equals(nodeId.toString())) // Exclude the target node itself
+                        .forEach(p -> childrenMap.put(p.getId(), getChildrenOf(Long.parseLong(p.getId()))));
+                    return new RevealPathDto(path, childrenMap);
+                })
+                .orElse(new RevealPathDto(Collections.emptyList(), Collections.emptyMap()));
+    }
 
-        // itemId가 Node인지 확인
-        Optional<Node> nodeAsNode = nodeRepository.findById(itemId);
-        if (nodeAsNode.isPresent()) {
-            startNodeOpt = nodeAsNode;
-        } else {
-            // Node가 아니라면 Sensor인지 확인하고, 맞다면 부모 Node를 경로의 시작점으로 설정
-            Optional<Sensor> sensorAsSensor = sensorRepository.findById(itemId);
-            startNodeOpt = sensorAsSensor.map(Sensor::getNode);
+    private List<NodeDto> findPath(Node node) {
+        if (node == null || node.getNodePath() == null || node.getNodePath().isEmpty()) {
+            return Collections.emptyList();
         }
 
-        // 경로의 시작점이 정해졌으면, 최상위 부모까지 경로를 재구성
-        Optional<Node> currentNodeOpt = startNodeOpt;
-        while (currentNodeOpt.isPresent()) {
-            Node currentNode = currentNodeOpt.get();
-            path.addFirst(new NodeDto(currentNode));
-            if (currentNode.getParentId() != null) {
-                currentNodeOpt = nodeRepository.findById(currentNode.getParentId());
-            } else {
-                currentNodeOpt = Optional.empty();
+        List<String> pathParts = Arrays.asList(node.getNodePath().split("\|"));
+        Map<String, String> pathToNameMap = pathParts.stream()
+            .collect(Collectors.toMap(Function.identity(), part -> part));
+
+        List<Node> nodesInPath = nodeRepository.findByNodePathStartingWith(pathParts.get(0));
+        
+        Map<String, Node> nodeMap = nodesInPath.stream()
+            .collect(Collectors.toMap(Node::getNodePath, Function.identity()));
+
+        List<NodeDto> resultPath = new ArrayList<>();
+        StringBuilder currentPath = new StringBuilder();
+        for (String part : pathParts) {
+            if (currentPath.length() > 0) {
+                currentPath.append("|");
+            }
+            currentPath.append(part);
+            Node pathNode = nodeMap.get(currentPath.toString());
+            if (pathNode != null) {
+                resultPath.add(toNodeDto(pathNode));
             }
         }
-        return path;
+        return resultPath;
     }
 
-
-    @Transactional(readOnly = true)
-    public RevealPathDto revealPath(String nodeId) {
-        List<NodeDto> path = findPathToNode(nodeId);
-        Map<String, List<NodeDto>> childrenMap = new HashMap<>();
-
-        if (path.isEmpty()) {
-            return new RevealPathDto(Collections.emptyList(), Collections.emptyMap());
-        }
-
-        // Per the test case, only add children for nodes in the path that are not the final target.
-        for (NodeDto nodeInPath : path) {
-            if (!nodeInPath.getId().equals(nodeId)) {
-                childrenMap.put(nodeInPath.getId(), getChildrenOf(nodeInPath.getId()));
-            }
-        }
-
-        return new RevealPathDto(path, childrenMap);
+    private NodeDto toNodeDto(Node node) {
+        NodeDto dto = new NodeDto();
+        dto.setId(node.getId().toString());
+        dto.setName(node.getNodeName());
+        dto.setType("folder");
+        // Compute hasChildren on the fly
+        dto.setHasChildren(nodeRepository.hasChildren(node.getId()) || !node.getSensors().isEmpty());
+        return dto;
     }
 
+    private NodeDto toSensorDto(Sensor sensor) {
+        NodeDto dto = new NodeDto();
+        dto.setId(sensor.getId().toString());
+        dto.setName(sensor.getSensorName());
+        dto.setType("sensor");
+        dto.setHasChildren(false);
+        return dto;
+    }
 }

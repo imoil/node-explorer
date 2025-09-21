@@ -20,7 +20,7 @@
       :class="[
         'tree-node',
         { 'highlight': node.id === highlightedItemId },
-        { 'is-visual-focus': isSearchActive && index === focusedIndex }
+        { 'is-focused': index === focusedIndex } // Simplified, reliable focus class
       ]"
       :style="{ paddingLeft: `${node._depth * 20}px` }"
       :ref="el => { if (index === focusedIndex) focusedItemRef = el }"
@@ -71,7 +71,6 @@ const emit = defineEmits(['sensor-selected']);
 // --- Pinia Store ---
 const store = useTreeStore();
 const {
-  nodes,
   rootNodeIds,
   highlightedItemId,
   isSearchActive,
@@ -79,7 +78,7 @@ const {
   openNodes,
   scrollToNodeId,
 } = storeToRefs(store);
-const { fetchNodes } = store;
+const { fetchNodes, getNode, getChildren } = store;
 
 // --- Local State ---
 const isLoading = ref(true);
@@ -89,17 +88,16 @@ const focusedItemRef = ref<any>(null);
 
 // --- Computed Properties ---
 const flattenedNodes = computed(() => {
-  console.log('[VUE] flattenedNodes: Re-computing...');
   const result: any[] = [];
   const flatten = (nodeIds: string[], depth: number) => {
     for (const nodeId of nodeIds) {
-      const node = store.getNode(nodeId);
+      const node = getNode(nodeId);
       if (!node) continue;
 
       result.push({ ...node, _depth: depth });
 
       if (openNodes.value[node.id] && node.hasChildren) {
-        const children = store.getChildren(node.id);
+        const children = getChildren(node.id);
         if (children.length > 0) {
           flatten(children.map(c => c.id), depth + 1);
         }
@@ -108,7 +106,6 @@ const flattenedNodes = computed(() => {
   };
 
   flatten(rootNodeIds.value, 0);
-  console.log(`[VUE] flattenedNodes: Computation finished. ${result.length} nodes flattened.`);
   return result;
 });
 
@@ -125,11 +122,12 @@ const handleToggleNode = async (node: any) => {
   openNodes.value[node.id] = isOpen;
 
   if (isOpen) {
-    const children = store.getChildren(node.id);
+    const children = getChildren(node.id);
     if (children.length === 0) {
-      node.isLoading = true;
+      const nodeInTree = getNode(node.id);
+      if (nodeInTree) nodeInTree.isLoading = true;
       await fetchNodes(node.id);
-      node.isLoading = false;
+      if (nodeInTree) nodeInTree.isLoading = false;
     }
   }
 };
@@ -139,7 +137,7 @@ onMounted(async () => {
   virtualTreeRef.value = {
     setFocusByIndex,
     getFocusedIndex: () => focusedIndex.value,
-    focus: () => setFocusByIndex(focusedIndex.value),
+    focus: focus,
   };
 
   isLoading.value = true;
@@ -151,7 +149,6 @@ onMounted(async () => {
 });
 
 const applyFocus = (index: number) => {
-  if (scrollerRef.value) scrollerRef.value.scrollToItem(index);
   nextTick(() => {
     focusedItemRef.value?.focus();
   });
@@ -159,32 +156,36 @@ const applyFocus = (index: number) => {
 
 const setFocusByIndex = (index: number) => {
   if (index >= 0 && index < flattenedNodes.value.length) {
-    if (focusedIndex.value === index) {
-      applyFocus(index);
-    } else {
-      focusedIndex.value = index;
-    }
+    focusedIndex.value = index;
   }
 };
 
 watch(focusedIndex, (index) => {
   applyFocus(index);
+  nextTick(() => {
+      focusedItemRef.value?.scrollIntoView({ block: 'nearest', behavior: 'auto' });
+  });
 });
 
-// Watch for changes in the flattened node list to handle scrolling requests.
-watch(flattenedNodes, (newNodes) => {
-  const targetId = scrollToNodeId.value;
-  console.log(`[VUE] Watcher(flattenedNodes): Triggered. Target ID is ${targetId}`);
+watch(openNodes, () => {
+  nextTick(() => {
+    focusedItemRef.value?.scrollIntoView({ block: 'nearest', behavior: 'auto' });
+  });
+}, { deep: true });
+
+
+watch(scrollToNodeId, (targetId) => {
   if (targetId) {
-    const index = newNodes.findIndex(n => n.id === targetId);
-    console.log(`[VUE] Watcher(flattenedNodes): Found index ${index} for target ID.`);
+    const index = flattenedNodes.value.findIndex(n => n.id === targetId);
     if (index !== -1) {
-      setFocusByIndex(index);
-      scrollToNodeId.value = null; // Reset the signal
-      console.log('[VUE] Watcher(flattenedNodes): Scrolled and reset signal.');
+      setTimeout(() => {
+        scrollerRef.value.scrollToItem(index);
+        setFocusByIndex(index);
+        scrollToNodeId.value = null; // Reset the signal
+      }, 50);
     }
   }
-}, { deep: true });
+});
 
 // --- Keyboard Navigation ---
 const handleClick = (node: any, index: number) => {
@@ -194,7 +195,8 @@ const handleClick = (node: any, index: number) => {
 
 const handleKeydown = (event: KeyboardEvent) => {
   const { key } = event;
-  const currentNode = flattenedNodes.value[focusedIndex.value];
+  const currentIndex = focusedIndex.value;
+  const currentNode = flattenedNodes.value[currentIndex];
   if (!currentNode) return;
 
   if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', ' ', 'Enter'].includes(key)) {
@@ -203,23 +205,33 @@ const handleKeydown = (event: KeyboardEvent) => {
 
   switch (key) {
     case 'ArrowUp':
-      if (focusedIndex.value > 0) focusedIndex.value--;
+      if (currentIndex > 0) focusedIndex.value--;
       break;
     case 'ArrowDown':
-      if (focusedIndex.value < flattenedNodes.value.length - 1) focusedIndex.value++;
+      if (currentIndex < flattenedNodes.value.length - 1) focusedIndex.value++;
       break;
     case 'ArrowRight':
-      if (currentNode.type === 'folder' && !openNodes.value[currentNode.id]) {
-        handleToggleNode(currentNode);
+      if (currentNode.type === 'folder' && currentNode.hasChildren) {
+        if (!openNodes.value[currentNode.id]) {
+          handleToggleNode(currentNode);
+          nextTick(() => {
+            if ((currentIndex + 1) < flattenedNodes.value.length && flattenedNodes.value[currentIndex + 1]._depth > currentNode._depth) {
+              focusedIndex.value++;
+            }
+          });
+        } else {
+          if ((currentIndex + 1) < flattenedNodes.value.length && flattenedNodes.value[currentIndex + 1]._depth > currentNode._depth) {
+            focusedIndex.value++;
+          }
+        }
       }
       break;
     case 'ArrowLeft':
       if (currentNode.type === 'folder' && openNodes.value[currentNode.id]) {
         handleToggleNode(currentNode);
       } else if (currentNode._depth > 0) {
-        const parent = flattenedNodes.value.findLast((n, i) => i < focusedIndex.value && n._depth < currentNode._depth);
-        if (parent) {
-          const parentIndex = flattenedNodes.value.indexOf(parent);
+        const parentIndex = flattenedNodes.value.findLastIndex((n, i) => i < currentIndex && n._depth < currentNode._depth);
+        if (parentIndex !== -1) {
           focusedIndex.value = parentIndex;
         }
       }
@@ -232,7 +244,7 @@ const handleKeydown = (event: KeyboardEvent) => {
 };
 
 const focus = () => {
-  setFocusByIndex(focusedIndex.value);
+  applyFocus(focusedIndex.value);
 };
 
 defineExpose({ focus });
@@ -248,11 +260,10 @@ defineExpose({ focus });
   padding-right: 16px;
   transition: background-color 0.2s;
 }
-.tree-node:hover, .tree-node:focus {
+.tree-node:hover {
   background-color: rgba(255, 255, 255, 0.05);
-  outline: none;
 }
-.tree-node:focus, .tree-node.is-visual-focus {
+.tree-node.is-focused {
   outline: 2px solid rgba(var(--v-theme-primary), 0.7);
   outline-offset: -2px;
 }

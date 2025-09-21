@@ -34,11 +34,11 @@
                </v-toolbar-title>
                <v-spacer></v-spacer>
                <div class="d-flex align-center text-body-2 mr-4">
-                 (Press <span class="kbd-shortcut">r</span> to refresh)
+                 (Refresh <span class="kbd-shortcut">r</span>)
                </div>
             </v-toolbar>
             <v-divider></v-divider>
-            
+
             <v-card-text class="pa-0" style="height: 70vh; overflow-y: auto;">
               <VirtualTree @sensor-selected="handleSensorSelect" />
             </v-card-text>

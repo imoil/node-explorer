@@ -6,14 +6,17 @@ import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
 import java.util.List;
+import java.util.Optional;
 
-public interface NodeRepository extends JpaRepository<Node, String> {
-    List<Node> findByParentId(String parentId);
-    List<Node> findByNameContainingIgnoreCase(String name);
+public interface NodeRepository extends JpaRepository<Node, Long> {
 
-    /**
-     * 메타데이터의 값(value)에 검색어가 포함된 Node를 찾습니다.
-     */
-    @Query("SELECT n FROM Node n JOIN n.metadata m WHERE LOWER(m) LIKE LOWER(CONCAT('%', :query, '%'))")
-    List<Node> findByMetadataValueContainingIgnoreCase(@Param("query") String query);
+    List<Node> findByParentId(Long parentId);
+
+    List<Node> findByNodeNameContainingIgnoreCase(String nodeName);
+
+    @Query("SELECT n FROM Node n WHERE n.nodePath LIKE :pathPrefix%")
+    List<Node> findByNodePathStartingWith(@Param("pathPrefix") String pathPrefix);
+
+    @Query("SELECT CASE WHEN COUNT(n) > 0 THEN true ELSE false END FROM Node n WHERE n.parentId = :nodeId")
+    boolean hasChildren(@Param("nodeId") Long nodeId);
 }

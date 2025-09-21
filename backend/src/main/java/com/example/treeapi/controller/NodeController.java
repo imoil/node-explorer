@@ -6,11 +6,10 @@ import com.example.treeapi.dto.SearchRequest;
 import com.example.treeapi.dto.SearchResultDto;
 import com.example.treeapi.service.TreeDataService;
 import jakarta.validation.Valid;
-import jakarta.validation.constraints.Pattern;
+import lombok.RequiredArgsConstructor;
 import org.springframework.http.ResponseEntity;
 import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.*;
-import lombok.RequiredArgsConstructor;
 
 import java.util.List;
 
@@ -27,19 +26,19 @@ public class NodeController {
     }
 
     @GetMapping("/nodes/{id}/children")
-    public List<NodeDto> getChildren(@PathVariable @Pattern(regexp = "^[a-zA-Z0-9\\-_]+$", message = "Invalid node ID format") String id) {
+    public List<NodeDto> getChildren(@PathVariable Long id) {
         return treeDataService.getChildrenOf(id);
     }
 
-    @PostMapping("/search")
+    @PostMapping("/nodes/search")
     public ResponseEntity<List<SearchResultDto>> searchNodes(
             @RequestBody @Valid SearchRequest request) {
         List<SearchResultDto> results = treeDataService.searchNodes(request.getQuery());
         return ResponseEntity.ok(results);
     }
 
-    @GetMapping("/reveal-path/{nodeId}")
-    public RevealPathDto revealPath(@PathVariable @Pattern(regexp = "^[a-zA-Z0-9\\-_]+$") String nodeId) {
+    @GetMapping("/nodes/reveal-path/{nodeId}")
+    public RevealPathDto revealPath(@PathVariable Long nodeId) {
         return treeDataService.revealPath(nodeId);
     }
 }

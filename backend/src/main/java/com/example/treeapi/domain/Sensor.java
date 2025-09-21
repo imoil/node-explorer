@@ -4,28 +4,21 @@ import jakarta.persistence.*;
 import lombok.Getter;
 import lombok.Setter;
 
-import java.util.Map;
+import java.util.HashSet;
+import java.util.Set;
 
 @Entity
+@Table(name = "SENSOR_INFO")
 @Getter
 @Setter
 public class Sensor {
 
     @Id
-    private String id;
+    private Long id;
 
-    private String name;
+    @Column(name = "SENSOR_NAME")
+    private String sensorName;
 
-    // ✨ 'type' 필드를 추가합니다.
-    private String type;
-
-    @ManyToOne(fetch = FetchType.LAZY)
-    @JoinColumn(name = "node_id")
-    private Node node;
-
-    @ElementCollection(fetch = FetchType.EAGER)
-    @CollectionTable(name = "sensor_metadata", joinColumns = @JoinColumn(name = "sensor_id"))
-    @MapKeyColumn(name = "metadata_key")
-    @Column(name = "metadata_value")
-    private Map<String, String> metadata;
+    @ManyToMany(mappedBy = "sensors")
+    private Set<Node> nodes = new HashSet<>();
 }

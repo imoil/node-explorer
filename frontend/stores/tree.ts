@@ -1,20 +1,20 @@
-import { defineStore } from 'pinia';
-import { useRuntimeConfig } from '#app';
+import { defineStore } from "pinia";
+import { useRuntimeConfig } from "#app";
 
 // Helper function to create a delay
-const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
-export const useTreeStore = defineStore('tree', () => {
+export const useTreeStore = defineStore("tree", () => {
   // --- STATE ---
   const nodes = ref<Map<string | null, any[]>>(new Map());
   const rootNodeIds = ref<string[]>([]);
   const openNodes = ref<Record<string, boolean>>({});
 
   // Search
-  const searchQuery = ref('');
-  const searchedQuery = ref('');
+  const searchQuery = ref("");
+  const searchedQuery = ref("");
   const isSearching = ref(false);
-  const searchStatus = ref('');
+  const searchStatus = ref("");
   const highlightedItemId = ref<string | null>(null);
   const isModalOpen = ref(false);
   const modalResults = ref<any[]>([]);
@@ -35,7 +35,7 @@ export const useTreeStore = defineStore('tree', () => {
   // --- GETTERS ---
   const getNode = (id: string) => {
     for (const children of nodes.value.values()) {
-      const node = children.find(c => c.id === id);
+      const node = children.find((c) => c.id === id);
       if (node) return node;
     }
     return null;
@@ -55,15 +55,15 @@ export const useTreeStore = defineStore('tree', () => {
     const url = parentId
       ? `${config.public.apiBaseUrl}/api/nodes/${parentId}/children`
       : `${config.public.apiBaseUrl}/api/nodes/root`;
-    
+
     try {
       const response = await fetch(url);
-      if (!response.ok) throw new Error('Failed to fetch nodes');
+      if (!response.ok) throw new Error("Failed to fetch nodes");
       const data = await response.json();
-      
+
       nodes.value.set(parentId, data);
       if (parentId === null) {
-        rootNodeIds.value = data.map(n => n.id);
+        rootNodeIds.value = data.map((n) => n.id);
       }
     } catch (error) {
       console.error(`Error fetching nodes for parent ${parentId}:`, error);
@@ -75,50 +75,56 @@ export const useTreeStore = defineStore('tree', () => {
     console.log(`[STORE] revealPath: Starting for nodeId: ${nodeId}`);
     const config = useRuntimeConfig();
     try {
-      const response = await fetch(`${config.public.apiBaseUrl}/api/nodes/reveal-path/${nodeId}`);
-      if (!response.ok) throw new Error('Failed to fetch reveal path');
+      const response = await fetch(
+        `${config.public.apiBaseUrl}/api/nodes/reveal-path/${nodeId}`,
+      );
+      if (!response.ok) throw new Error("Failed to fetch reveal path");
       const pathDto = await response.json();
-      console.log('[STORE] revealPath: Received DTO', JSON.parse(JSON.stringify(pathDto)));
+      console.log(
+        "[STORE] revealPath: Received DTO",
+        JSON.parse(JSON.stringify(pathDto)),
+      );
 
       // Using `for...in` loop to ensure reactivity on object property changes
       for (const parentId in pathDto.childrenMap) {
-        const key = parentId === 'null' ? null : parentId;
+        const key = parentId === "null" ? null : parentId;
         nodes.value.set(key, pathDto.childrenMap[parentId]);
       }
-      console.log('[STORE] revealPath: nodes map updated.');
+      console.log("[STORE] revealPath: nodes map updated.");
 
       for (const nodeInPath of pathDto.path) {
         if (nodeInPath.hasChildren) {
           openNodes.value[nodeInPath.id] = true;
         }
       }
-      console.log('[STORE] revealPath: openNodes updated.');
+      console.log("[STORE] revealPath: openNodes updated.");
 
       // Signal the component to scroll
       scrollToNodeId.value = nodeId;
       highlightedItemId.value = nodeId;
       console.log(`[STORE] revealPath: Set scrollToNodeId to ${nodeId}`);
-
     } catch (error) {
-      console.error('Reveal path error:', error);
+      console.error("Reveal path error:", error);
     }
   }
 
   async function refreshExpandedNodes() {
     isRefreshing.value = true;
-    searchStatus.value = 'Refreshing tree...';
+    searchStatus.value = "Refreshing tree...";
     searchStatusOverlay.value = true;
 
     try {
-      const openNodeIds = Object.keys(openNodes.value).filter(id => openNodes.value[id]);
-      const refreshPromises = openNodeIds.map(id => fetchNodes(id, true));
+      const openNodeIds = Object.keys(openNodes.value).filter(
+        (id) => openNodes.value[id],
+      );
+      const refreshPromises = openNodeIds.map((id) => fetchNodes(id, true));
       refreshPromises.push(fetchNodes(null, true));
-      
+
       await Promise.all(refreshPromises);
-      searchStatus.value = 'Tree refreshed successfully!';
+      searchStatus.value = "Tree refreshed successfully!";
     } catch (error) {
-      console.error('Error refreshing nodes:', error);
-      searchStatus.value = 'An error occurred during refresh.';
+      console.error("Error refreshing nodes:", error);
+      searchStatus.value = "An error occurred during refresh.";
     } finally {
       isRefreshing.value = false;
       closeOverlayAfterDelay();
@@ -147,13 +153,16 @@ export const useTreeStore = defineStore('tree', () => {
 
     try {
       const config = useRuntimeConfig();
-      const response = await fetch(`${config.public.apiBaseUrl}/api/search`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ query: searchedQuery.value }),
-      });
+      const response = await fetch(
+        `${config.public.apiBaseUrl}/api/nodes/search`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ query: searchedQuery.value }),
+        },
+      );
 
-      if (!response.ok) throw new Error('Search request failed');
+      if (!response.ok) throw new Error("Search request failed");
       const results = await response.json();
 
       if (results.length === 0) {
@@ -169,8 +178,8 @@ export const useTreeStore = defineStore('tree', () => {
         searchStatusOverlay.value = false;
       }
     } catch (error) {
-      console.error('Search error:', error);
-      searchStatus.value = 'An error occurred during the search.';
+      console.error("Search error:", error);
+      searchStatus.value = "An error occurred during the search.";
       closeOverlayAfterDelay();
     } finally {
       isSearching.value = false;
@@ -178,7 +187,7 @@ export const useTreeStore = defineStore('tree', () => {
   }
 
   async function selectItem(item: { id: string; name: string }) {
-    console.log('[APP] selectItem: Item selected from modal', item);
+    console.log("[APP] selectItem: Item selected from modal", item);
     isModalOpen.value = false;
     singleResultFound.value = true;
     searchStatus.value = `Revealing path for "${item.name}"...`;
@@ -188,12 +197,12 @@ export const useTreeStore = defineStore('tree', () => {
       await revealPath(item.id);
       closeOverlayAfterDelay();
     } catch (error) {
-      console.error('Reveal path error:', error);
-      searchStatus.value = 'An error occurred during the search.';
+      console.error("Reveal path error:", error);
+      searchStatus.value = "An error occurred during the search.";
       closeOverlayAfterDelay();
     }
   }
-  
+
   watch(searchStatusOverlay, (isShowing) => {
     if (!isShowing) {
       if (overlayCloseTimer) clearTimeout(overlayCloseTimer);
