@@ -12,7 +12,6 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.util.*;
-import java.util.function.Function;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
@@ -28,6 +27,7 @@ public class TreeDataService {
         // In the new schema, root nodes are children of a virtual node with ID 1.
         return nodeRepository.findByParentId(1L).stream()
                 .map(this::toNodeDto)
+                .sorted(Comparator.comparing(NodeDto::getName))
                 .collect(Collectors.toList());
     }
 
@@ -43,10 +43,16 @@ public class TreeDataService {
         // Since the relationship is now ManyToMany, we fetch the parent and get sensors.
         nodeRepository.findById(parentId).ifPresent(parent -> {
             List<NodeDto> sensorDtos = parent.getSensors().stream()
-                    .map(this::toSensorDto)
+                    .map(sensor -> {
+                        NodeDto dto = toSensorDto(sensor);
+                        dto.setParentId(parent.getId().toString()); // Set correct parent ID
+                        return dto;
+                    })
                     .collect(Collectors.toList());
             childNodes.addAll(sensorDtos);
         });
+
+        childNodes.sort(Comparator.comparing(NodeDto::getName));
 
         return childNodes;
     }
@@ -78,32 +84,20 @@ public class TreeDataService {
     }
 
     private List<NodeDto> findPath(Node node) {
-        if (node == null || node.getNodePath() == null || node.getNodePath().isEmpty()) {
-            return Collections.emptyList();
+        LinkedList<NodeDto> path = new LinkedList<>();
+        Node currentNode = node;
+        while (currentNode != null && currentNode.getParentId() != null) {
+            path.addFirst(toNodeDto(currentNode));
+            currentNode = nodeRepository.findById(currentNode.getParentId()).orElse(null);
         }
-
-        List<String> pathParts = Arrays.asList(node.getNodePath().split("\|"));
-        Map<String, String> pathToNameMap = pathParts.stream()
-            .collect(Collectors.toMap(Function.identity(), part -> part));
-
-        List<Node> nodesInPath = nodeRepository.findByNodePathStartingWith(pathParts.get(0));
-        
-        Map<String, Node> nodeMap = nodesInPath.stream()
-            .collect(Collectors.toMap(Node::getNodePath, Function.identity()));
-
-        List<NodeDto> resultPath = new ArrayList<>();
-        StringBuilder currentPath = new StringBuilder();
-        for (String part : pathParts) {
-            if (currentPath.length() > 0) {
-                currentPath.append("|");
-            }
-            currentPath.append(part);
-            Node pathNode = nodeMap.get(currentPath.toString());
-            if (pathNode != null) {
-                resultPath.add(toNodeDto(pathNode));
-            }
+        if (currentNode != null) {
+            path.addFirst(toNodeDto(currentNode));
         }
-        return resultPath;
+        // The absolute root (ID=1) is virtual, so remove it if it's in the path
+        if (!path.isEmpty() && "1".equals(path.getFirst().getId())) {
+            path.removeFirst();
+        }
+        return path;
     }
 
     private NodeDto toNodeDto(Node node) {
@@ -111,8 +105,12 @@ public class TreeDataService {
         dto.setId(node.getId().toString());
         dto.setName(node.getNodeName());
         dto.setType("folder");
+        if (node.getParentId() != null) {
+            dto.setParentId(node.getParentId().toString());
+        }
         // Compute hasChildren on the fly
         dto.setHasChildren(nodeRepository.hasChildren(node.getId()) || !node.getSensors().isEmpty());
+        dto.setMetadata(Collections.emptyMap());
         return dto;
     }
 
@@ -122,6 +120,7 @@ public class TreeDataService {
         dto.setName(sensor.getSensorName());
         dto.setType("sensor");
         dto.setHasChildren(false);
+        dto.setMetadata(Collections.emptyMap());
         return dto;
     }
 }

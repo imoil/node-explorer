@@ -56,6 +56,7 @@ spring:
     hibernate:
       # 서버 실행 시 스키마를 생성하고, 종료 시 삭제
       ddl-auto: create-drop
+    defer-datasource-initialization: true
 #    show-sql: true
     properties:
       hibernate:
@@ -161,6 +162,10 @@ spring:
   config:
     activate:
       on-profile: test
+
+  sql:
+    init:
+      mode: never
 
   datasource:
     # 테스트 실행 동안 DB 유지

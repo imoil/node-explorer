@@ -1,13 +1,15 @@
 import { defineStore } from "pinia";
 import { useRuntimeConfig } from "#app";
+import { toRaw } from 'vue';
 
 // Helper function to create a delay
 const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 export const useTreeStore = defineStore("tree", () => {
   // --- STATE ---
-  const nodes = ref<Map<string | null, any[]>>(new Map());
-  const rootNodeIds = ref<string[]>([]);
+  const folderNodes = ref<Map<string, any>>(new Map());
+  const sensorNodes = ref<Map<string, any>>(new Map());
+  const children = ref<Map<string | null, { id: string; type: string }[]>>(new Map());
   const openNodes = ref<Record<string, boolean>>({});
 
   // Search
@@ -33,23 +35,38 @@ export const useTreeStore = defineStore("tree", () => {
   const scrollToNodeId = ref<string | null>(null);
 
   // --- GETTERS ---
-  const getNode = (id: string) => {
-    for (const children of nodes.value.values()) {
-      const node = children.find((c) => c.id === id);
-      if (node) return node;
-    }
-    return null;
-  };
 
-  const getChildren = (parentId: string | null) => {
-    return nodes.value.get(parentId) || [];
+  const getRootNodeIds = () => children.value.get(null) || [];
+  const getNode = (id: string, type: string) => {
+    return type === 'folder' ? folderNodes.value.get(id) : sensorNodes.value.get(id);
   };
+  const getChildrenIds = (parentId: string | null) => children.value.get(parentId) || [];
 
   // --- ACTIONS ---
 
+  function addNodes(nodeData: any[]) {
+    for (const node of nodeData) {
+      const map = node.type === 'folder' ? folderNodes.value : sensorNodes.value;
+      if (!map.has(node.id)) {
+        map.set(node.id, node);
+      }
+
+      const parentId = node.parentId === undefined ? null : node.parentId;
+      const childList = children.value.get(parentId) || [];
+      const childExists = childList.some(c => c.id === node.id && c.type === node.type);
+
+      if (!childExists) {
+        childList.push({ id: node.id, type: node.type });
+        children.value.set(parentId, childList);
+      }
+    }
+  }
+
   // --- Tree Data Actions ---
+
   async function fetchNodes(parentId: string | null = null, force = false) {
-    if (nodes.value.has(parentId) && !force) return;
+    const childrenIds = children.value.get(parentId);
+    if (childrenIds && childrenIds.length > 0 && !force) return;
 
     const config = useRuntimeConfig();
     const url = parentId
@@ -57,52 +74,50 @@ export const useTreeStore = defineStore("tree", () => {
       : `${config.public.apiBaseUrl}/api/nodes/root`;
 
     try {
+      console.log(`[STORE] Fetching nodes for parentId: ${parentId}`);
       const response = await fetch(url);
       if (!response.ok) throw new Error("Failed to fetch nodes");
       const data = await response.json();
+      console.log(`[STORE] Fetched data for parentId ${parentId}:`, JSON.parse(JSON.stringify(data)));
+      
+      addNodes(data);
 
-      nodes.value.set(parentId, data);
-      if (parentId === null) {
-        rootNodeIds.value = data.map((n) => n.id);
-      }
+      const newChildren = data.map((n: any) => ({ id: n.id, type: n.type }));
+      children.value.set(parentId, newChildren);
+
     } catch (error) {
       console.error(`Error fetching nodes for parent ${parentId}:`, error);
-      nodes.value.set(parentId, []);
+      children.value.set(parentId, []);
     }
   }
 
+
+
   async function revealPath(nodeId: string) {
-    console.log(`[STORE] revealPath: Starting for nodeId: ${nodeId}`);
     const config = useRuntimeConfig();
     try {
       const response = await fetch(
-        `${config.public.apiBaseUrl}/api/nodes/reveal-path/${nodeId}`,
+        `${config.public.apiBaseUrl}/api/nodes/reveal-path/${nodeId}`
       );
       if (!response.ok) throw new Error("Failed to fetch reveal path");
       const pathDto = await response.json();
-      console.log(
-        "[STORE] revealPath: Received DTO",
-        JSON.parse(JSON.stringify(pathDto)),
-      );
 
-      // Using `for...in` loop to ensure reactivity on object property changes
       for (const parentId in pathDto.childrenMap) {
         const key = parentId === "null" ? null : parentId;
-        nodes.value.set(key, pathDto.childrenMap[parentId]);
+        const nodesData = pathDto.childrenMap[parentId];
+        addNodes(nodesData);
+        const newChildren = nodesData.map((n: any) => ({ id: n.id, type: n.type }));
+        children.value.set(key, newChildren);
       }
-      console.log("[STORE] revealPath: nodes map updated.");
 
       for (const nodeInPath of pathDto.path) {
         if (nodeInPath.hasChildren) {
           openNodes.value[nodeInPath.id] = true;
         }
       }
-      console.log("[STORE] revealPath: openNodes updated.");
 
-      // Signal the component to scroll
       scrollToNodeId.value = nodeId;
       highlightedItemId.value = nodeId;
-      console.log(`[STORE] revealPath: Set scrollToNodeId to ${nodeId}`);
     } catch (error) {
       console.error("Reveal path error:", error);
     }
@@ -132,6 +147,7 @@ export const useTreeStore = defineStore("tree", () => {
   }
 
   // --- Search Actions ---
+
   function closeOverlayAfterDelay(delayMs = 1000) {
     if (overlayCloseTimer) clearTimeout(overlayCloseTimer);
     overlayCloseTimer = setTimeout(() => {
@@ -187,7 +203,6 @@ export const useTreeStore = defineStore("tree", () => {
   }
 
   async function selectItem(item: { id: string; name: string }) {
-    console.log("[APP] selectItem: Item selected from modal", item);
     isModalOpen.value = false;
     singleResultFound.value = true;
     searchStatus.value = `Revealing path for "${item.name}"...`;
@@ -216,8 +231,9 @@ export const useTreeStore = defineStore("tree", () => {
 
   return {
     // State
-    nodes,
-    rootNodeIds,
+    folderNodes,
+    sensorNodes,
+    children,
     openNodes,
     searchQuery,
     searchedQuery,
@@ -235,8 +251,9 @@ export const useTreeStore = defineStore("tree", () => {
     virtualTreeRef,
     scrollToNodeId,
     // Getters
+    getRootNodeIds,
     getNode,
-    getChildren,
+    getChildrenIds,
     // Actions
     fetchNodes,
     revealPath,

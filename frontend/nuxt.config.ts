@@ -2,6 +2,7 @@ export default defineNuxtConfig({
   compatibilityDate: '2025-09-18',
   devtools: { enabled: true },
 
+
   modules: ['@pinia/nuxt'],
 
   // API 서버가 분리되었으므로 Nuxt의 서버 디렉토리를 사용하지 않음

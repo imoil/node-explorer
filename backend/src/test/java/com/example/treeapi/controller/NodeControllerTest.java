@@ -54,30 +54,30 @@ class NodeControllerTest {
 
         // 테스트 데이터 준비
         rootNodeDto = new NodeDto();
-        rootNodeDto.setId("root");
+        rootNodeDto.setId("1");
         rootNodeDto.setName("Root Node");
         rootNodeDto.setHasChildren(true);
 
         parentNodeDto = new NodeDto();
-        parentNodeDto.setId("parent");
+        parentNodeDto.setId("2");
         parentNodeDto.setName("Parent Node");
         parentNodeDto.setHasChildren(true);
 
         nodeDto = new NodeDto();
-        nodeDto.setId("node1");
+        nodeDto.setId("3");
         nodeDto.setName("Test Node");
         nodeDto.setHasChildren(false);
 
         // SearchResultDto 생성
         List<NodeDto> searchPath = Arrays.asList(rootNodeDto, parentNodeDto, nodeDto);
-        searchResultDto = new SearchResultDto("search1", "Search Result", "file", searchPath);
+        searchResultDto = new SearchResultDto("4", "Search Result", "file", searchPath);
 
         // RevealPathDto 생성
         List<NodeDto> revealPath = Arrays.asList(rootNodeDto, parentNodeDto, nodeDto);
         Map<String, List<NodeDto>> childrenMap = new HashMap<>();
-        childrenMap.put("root", Arrays.asList(parentNodeDto));
-        childrenMap.put("parent", Arrays.asList(nodeDto));
-        childrenMap.put("node1", Collections.emptyList());
+        childrenMap.put("1", Arrays.asList(parentNodeDto));
+        childrenMap.put("2", Arrays.asList(nodeDto));
+        childrenMap.put("3", Collections.emptyList());
         revealPathDto = new RevealPathDto(revealPath, childrenMap);
     }
 
@@ -98,10 +98,10 @@ class NodeControllerTest {
                     .andExpect(content().contentType(MediaType.APPLICATION_JSON))
                     .andExpect(jsonPath("$").isArray())
                     .andExpect(jsonPath("$.length()").value(2))
-                    .andExpect(jsonPath("$[0].id").value("root"))
+                    .andExpect(jsonPath("$[0].id").value("1"))
                     .andExpect(jsonPath("$[0].name").value("Root Node"))
                     .andExpect(jsonPath("$[0].hasChildren").value(true))
-                    .andExpect(jsonPath("$[1].id").value("parent"))
+                    .andExpect(jsonPath("$[1].id").value("2"))
                     .andExpect(jsonPath("$[1].name").value("Parent Node"))
                     .andExpect(jsonPath("$[1].hasChildren").value(true));
         }
@@ -130,7 +130,7 @@ class NodeControllerTest {
             mockMvc.perform(get("/api/nodes/root"))
                     .andExpect(status().isOk())
                     .andExpect(jsonPath("$.length()").value(1))
-                    .andExpect(jsonPath("$[0].id").value("root"));
+                    .andExpect(jsonPath("$[0].id").value("1"));
         }
     }
 
@@ -142,7 +142,7 @@ class NodeControllerTest {
         @DisplayName("부모 노드의 자식 노드들을 성공적으로 반환한다")
         void shouldReturnChildrenWithValidId() throws Exception {
             // Given
-            String parentId = "parent";
+            Long parentId = 2L;
             List<NodeDto> children = Arrays.asList(nodeDto);
             when(treeDataService.getChildrenOf(parentId)).thenReturn(children);
 
@@ -152,7 +152,7 @@ class NodeControllerTest {
                     .andExpect(content().contentType(MediaType.APPLICATION_JSON))
                     .andExpect(jsonPath("$").isArray())
                     .andExpect(jsonPath("$.length()").value(1))
-                    .andExpect(jsonPath("$[0].id").value("node1"))
+                    .andExpect(jsonPath("$[0].id").value("3"))
                     .andExpect(jsonPath("$[0].name").value("Test Node"))
                     .andExpect(jsonPath("$[0].hasChildren").value(false));
         }
@@ -161,14 +161,14 @@ class NodeControllerTest {
         @DisplayName("여러 자식 노드들을 반환한다")
         void shouldReturnMultipleChildren() throws Exception {
             // Given
-            String parentId = "parent";
+            Long parentId = 2L;
             NodeDto child1 = new NodeDto();
-            child1.setId("child1");
+            child1.setId("10");
             child1.setName("Child 1");
             child1.setHasChildren(false);
 
             NodeDto child2 = new NodeDto();
-            child2.setId("child2");
+            child2.setId("11");
             child2.setName("Child 2");
             child2.setHasChildren(true);
 
@@ -179,9 +179,9 @@ class NodeControllerTest {
             mockMvc.perform(get("/api/nodes/{id}/children", parentId))
                     .andExpect(status().isOk())
                     .andExpect(jsonPath("$.length()").value(2))
-                    .andExpect(jsonPath("$[0].id").value("child1"))
+                    .andExpect(jsonPath("$[0].id").value("10"))
                     .andExpect(jsonPath("$[0].hasChildren").value(false))
-                    .andExpect(jsonPath("$[1].id").value("child2"))
+                    .andExpect(jsonPath("$[1].id").value("11"))
                     .andExpect(jsonPath("$[1].hasChildren").value(true));
         }
 
@@ -189,7 +189,7 @@ class NodeControllerTest {
         @DisplayName("자식이 없는 노드는 빈 배열을 반환한다")
         void shouldReturnEmptyChildrenList() throws Exception {
             // Given
-            String leafNodeId = "leaf";
+            Long leafNodeId = 99L;
             when(treeDataService.getChildrenOf(leafNodeId)).thenReturn(Collections.emptyList());
 
             // When & Then
@@ -200,23 +200,7 @@ class NodeControllerTest {
                     .andExpect(jsonPath("$.length()").value(0));
         }
 
-        @Test
-        @DisplayName("다양한 유효한 ID 형식들을 허용한다")
-        void shouldAllowValidIdFormats() throws Exception {
-            // Given
-            List<String> validIds = Arrays.asList(
-                    "simple", "with-dash", "with_underscore", "MixedCase123",
-                    "number123", "ABC-def_123", "a", "123"
-            );
-            when(treeDataService.getChildrenOf(anyString())).thenReturn(Collections.emptyList());
 
-            // When & Then
-            for (String validId : validIds) {
-                mockMvc.perform(get("/api/nodes/{id}/children", validId))
-                        .andExpect(status().isOk())
-                        .andExpect(jsonPath("$").isArray());
-            }
-        }
     }
 
     @Nested
@@ -241,14 +225,14 @@ class NodeControllerTest {
                     .andExpect(content().contentType(MediaType.APPLICATION_JSON))
                     .andExpect(jsonPath("$").isArray())
                     .andExpect(jsonPath("$.length()").value(1))
-                    .andExpect(jsonPath("$[0].id").value("search1"))
+                    .andExpect(jsonPath("$[0].id").value("4"))
                     .andExpect(jsonPath("$[0].name").value("Search Result"))
                     .andExpect(jsonPath("$[0].type").value("file"))
                     .andExpect(jsonPath("$[0].path").isArray())
                     .andExpect(jsonPath("$[0].path.length()").value(3))
-                    .andExpect(jsonPath("$[0].path[0].id").value("root"))
-                    .andExpect(jsonPath("$[0].path[1].id").value("parent"))
-                    .andExpect(jsonPath("$[0].path[2].id").value("node1"));
+                    .andExpect(jsonPath("$[0].path[0].id").value("1"))
+                    .andExpect(jsonPath("$[0].path[1].id").value("2"))
+                    .andExpect(jsonPath("$[0].path[2].id").value("3"));
         }
 
         @Test
@@ -327,7 +311,7 @@ class NodeControllerTest {
         @DisplayName("노드의 전체 경로와 자식 맵을 성공적으로 반환한다")
         void shouldReturnRevealPath() throws Exception {
             // Given
-            String nodeId = "node1";
+            Long nodeId = 3L;
             when(treeDataService.revealPath(nodeId)).thenReturn(revealPathDto);
 
             // When & Then
@@ -336,23 +320,23 @@ class NodeControllerTest {
                     .andExpect(content().contentType(MediaType.APPLICATION_JSON))
                     .andExpect(jsonPath("$.path").isArray())
                     .andExpect(jsonPath("$.path.length()").value(3))
-                    .andExpect(jsonPath("$.path[0].id").value("root"))
-                    .andExpect(jsonPath("$.path[1].id").value("parent"))
-                    .andExpect(jsonPath("$.path[2].id").value("node1"))
+                    .andExpect(jsonPath("$.path[0].id").value("1"))
+                    .andExpect(jsonPath("$.path[1].id").value("2"))
+                    .andExpect(jsonPath("$.path[2].id").value("3"))
                     .andExpect(jsonPath("$.childrenMap").isMap())
-                    .andExpect(jsonPath("$.childrenMap.root").isArray())
-                    .andExpect(jsonPath("$.childrenMap.parent").isArray())
-                    .andExpect(jsonPath("$.childrenMap.node1").isArray());
+                    .andExpect(jsonPath("$.childrenMap.1").isArray())
+                    .andExpect(jsonPath("$.childrenMap.2").isArray())
+                    .andExpect(jsonPath("$.childrenMap.3").isArray());
         }
 
         @Test
         @DisplayName("루트 노드의 경로를 반환한다")
         void shouldReturnRootNodePath() throws Exception {
             // Given
-            String rootId = "root";
+            Long rootId = 1L;
             RevealPathDto rootRevealPath = new RevealPathDto(
                     Arrays.asList(rootNodeDto),
-                    Map.of("root", Arrays.asList(parentNodeDto))
+                    Map.of("1", Arrays.asList(parentNodeDto))
             );
             when(treeDataService.revealPath(rootId)).thenReturn(rootRevealPath);
 
@@ -360,15 +344,15 @@ class NodeControllerTest {
             mockMvc.perform(get("/api/nodes/reveal-path/{nodeId}", rootId))
                     .andExpect(status().isOk())
                     .andExpect(jsonPath("$.path.length()").value(1))
-                    .andExpect(jsonPath("$.path[0].id").value("root"))
-                    .andExpect(jsonPath("$.childrenMap.root").isArray());
+                    .andExpect(jsonPath("$.path[0].id").value("1"))
+                    .andExpect(jsonPath("$.childrenMap.1").isArray());
         }
 
         @Test
         @DisplayName("빈 경로 결과를 처리한다")
         void shouldHandleEmptyRevealPath() throws Exception {
             // Given
-            String nodeId = "emptyNode";
+            Long nodeId = 404L;
             RevealPathDto emptyRevealPath = new RevealPathDto(Collections.emptyList(), new HashMap<>());
             when(treeDataService.revealPath(nodeId)).thenReturn(emptyRevealPath);
 
@@ -381,24 +365,7 @@ class NodeControllerTest {
                     .andExpect(jsonPath("$.childrenMap").isMap());
         }
 
-        @Test
-        @DisplayName("다양한 유효한 노드 ID 형식들을 허용한다")
-        void shouldAllowValidNodeIdFormats() throws Exception {
-            // Given
-            List<String> validNodeIds = Arrays.asList(
-                    "node1", "node-2", "node_3", "Node123", "ABC-def_123",
-                    "simple", "123", "a-b_c"
-            );
-            when(treeDataService.revealPath(anyString())).thenReturn(revealPathDto);
 
-            // When & Then
-            for (String validNodeId : validNodeIds) {
-                mockMvc.perform(get("/api/nodes/reveal-path/{nodeId}", validNodeId))
-                        .andExpect(status().isOk())
-                        .andExpect(jsonPath("$.path").isArray())
-                        .andExpect(jsonPath("$.childrenMap").isMap());
-            }
-        }
     }
 
     @Nested
@@ -410,20 +377,20 @@ class NodeControllerTest {
         void shouldHandleCompleteWorkflow() throws Exception {
             // Given
             when(treeDataService.getRootNodes()).thenReturn(Arrays.asList(rootNodeDto));
-            when(treeDataService.getChildrenOf("root")).thenReturn(Arrays.asList(parentNodeDto));
+            when(treeDataService.getChildrenOf(1L)).thenReturn(Arrays.asList(parentNodeDto));
             when(treeDataService.searchNodes("Test")).thenReturn(Arrays.asList(searchResultDto));
-            when(treeDataService.revealPath("search1")).thenReturn(revealPathDto);
+            when(treeDataService.revealPath(4L)).thenReturn(revealPathDto);
 
             // When & Then
             // 1. 루트 노드 조회
             mockMvc.perform(get("/api/nodes/root"))
                     .andExpect(status().isOk())
-                    .andExpect(jsonPath("$[0].id").value("root"));
+                    .andExpect(jsonPath("$[0].id").value("1"));
 
             // 2. 루트의 자식 노드 조회
-            mockMvc.perform(get("/api/nodes/root/children"))
+            mockMvc.perform(get("/api/nodes/1/children"))
                     .andExpect(status().isOk())
-                    .andExpect(jsonPath("$[0].id").value("parent"));
+                    .andExpect(jsonPath("$[0].id").value("2"));
 
             // 3. 노드 검색
             SearchRequest searchRequest = new SearchRequest();
@@ -432,11 +399,11 @@ class NodeControllerTest {
                             .contentType(MediaType.APPLICATION_JSON)
                             .content(objectMapper.writeValueAsString(searchRequest)))
                     .andExpect(status().isOk())
-                    .andExpect(jsonPath("$[0].id").value("search1"))
+                    .andExpect(jsonPath("$[0].id").value("4"))
                     .andExpect(jsonPath("$[0].type").value("file"));
 
             // 4. 검색된 노드의 경로 조회
-            mockMvc.perform(get("/api/nodes/reveal-path/search1"))
+            mockMvc.perform(get("/api/nodes/reveal-path/4"))
                     .andExpect(status().isOk())
                     .andExpect(jsonPath("$.path").isArray())
                     .andExpect(jsonPath("$.childrenMap").isMap());

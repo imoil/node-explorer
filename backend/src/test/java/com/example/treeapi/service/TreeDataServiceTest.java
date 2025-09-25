@@ -15,13 +15,13 @@ import org.springframework.test.context.ActiveProfiles;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.util.List;
-import java.util.Map;
+import java.util.Set;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
 @SpringBootTest
 @Transactional
-@ActiveProfiles("test") // Make sure we use the test profile
+@ActiveProfiles("test")
 class TreeDataServiceTest {
 
     @Autowired
@@ -33,91 +33,87 @@ class TreeDataServiceTest {
     @Autowired
     private SensorRepository sensorRepository;
 
+    private Node root;
+    private Node child1;
+    private Node child2;
+    private Node grandchild1;
+    private Sensor sensor1;
+
     @BeforeEach
     void setUp() {
         // Clear existing data before each test to ensure isolation
-        sensorRepository.deleteAllInBatch();
-        nodeRepository.deleteAllInBatch();
+        nodeRepository.deleteAll();
+        sensorRepository.deleteAll();
 
         // Create a consistent test data set
-        Node root1 = createNode("root|1", "Manufacturing", null, true, Map.of("owner", "Alice"));
-        Node root2 = createNode("root|2", "Logistics", null, false, Map.of("owner", "Bob"));
-
-        Node factoryA = createNode("root|1|factory-a", "Factory A", "root|1", true, Map.of("location", "Germany"));
-        Node factoryB = createNode("root|1|factory-b", "Factory B", "root|1", false, Map.of("location", "Korea"));
-
-        Node line1 = createNode("root|1|factory-a|line-1", "Production Line 1", "root|1|factory-a", false, Map.of());
-
-        createSensor("sensor|temp|1", "Temperature Sensor", factoryA, Map.of("unit", "C"));
-        createSensor("sensor|humidity|1", "Humidity Sensor", factoryA, Map.of("unit", "%"));
+        root = createNode(1L, "ROOT", null, "ROOT");
+        child1 = createNode(101L, "ROOT1", 1L, "ROOT1");
+        child2 = createNode(102L, "ROOT2", 1L, "ROOT2");
+        grandchild1 = createNode(104L, "NODE1", 101L, "ROOT1|NODE1");
+        sensor1 = createSensor(201L, "SENSOR1", child1);
     }
 
-    private Node createNode(String id, String name, String parentId, boolean hasChildren, Map<String, String> metadata) {
+    private Node createNode(Long id, String name, Long parentId, String nodePath) {
         Node node = new Node();
         node.setId(id);
-        node.setName(name);
+        node.setNodeName(name);
         node.setParentId(parentId);
-        node.setHasChildren(hasChildren);
-        node.setType("folder");
-        node.setMetadata(metadata);
+        node.setNodePath(nodePath);
         return nodeRepository.save(node);
     }
 
-    private void createSensor(String id, String name, Node parentNode, Map<String, String> metadata) {
+    private Sensor createSensor(Long id, String name, Node parentNode) {
         Sensor sensor = new Sensor();
         sensor.setId(id);
-        sensor.setName(name);
-        sensor.setType("sensor");
-        sensor.setNode(parentNode);
-        sensor.setMetadata(metadata);
+        sensor.setSensorName(name);
+        sensor.setNodes(Set.of(parentNode));
         sensorRepository.save(sensor);
+        parentNode.getSensors().add(sensor);
+        nodeRepository.save(parentNode);
+        return sensor;
     }
 
     @Test
     void testGetRootNodes() {
         List<NodeDto> rootNodes = treeDataService.getRootNodes();
         assertThat(rootNodes).hasSize(2);
-        assertThat(rootNodes).extracting(NodeDto::getName).contains("Manufacturing", "Logistics");
+        assertThat(rootNodes).extracting(NodeDto::getName).contains("ROOT1", "ROOT2");
     }
 
     @Test
     void testGetChildrenOf() {
-        // Test node with folder children and sensor children
-        List<NodeDto> childrenOfFactoryA = treeDataService.getChildrenOf("root|1|factory-a");
-        assertThat(childrenOfFactoryA).hasSize(3); // 1 folder + 2 sensors
-        assertThat(childrenOfFactoryA).extracting(NodeDto::getName).contains("Production Line 1", "Temperature Sensor", "Humidity Sensor");
+        // Test node with a folder child and a sensor child
+        List<NodeDto> childrenOfChild1 = treeDataService.getChildrenOf(101L);
+        assertThat(childrenOfChild1).hasSize(2);
+        assertThat(childrenOfChild1).extracting(NodeDto::getName).contains("NODE1", "SENSOR1");
+        assertThat(childrenOfChild1).extracting(NodeDto::getType).contains("folder", "sensor");
 
         // Test node with no children
-        List<NodeDto> childrenOfLogistics = treeDataService.getChildrenOf("root|2");
-        assertThat(childrenOfLogistics).isEmpty();
-    }
-
-    @Test
-    void testFindPathToNode() {
-        // Test a deeply nested node
-        List<NodeDto> path = treeDataService.findPathToNode("root|1|factory-a|line-1");
-        assertThat(path).hasSize(3);
-        assertThat(path).extracting(NodeDto::getId).containsExactly("root|1", "root|1|factory-a", "root|1|factory-a|line-1");
+        List<NodeDto> childrenOfChild2 = treeDataService.getChildrenOf(102L);
+        assertThat(childrenOfChild2).isEmpty();
     }
 
     @Test
     void testSearchNodes() {
-        List<SearchResultDto> results = treeDataService.searchNodes("Factory");
-        assertThat(results).hasSize(2);
-        assertThat(results).extracting(SearchResultDto::getName).contains("Factory A", "Factory B");
+        List<SearchResultDto> results = treeDataService.searchNodes("ROOT");
+        assertThat(results).hasSize(3);
+        assertThat(results).extracting(SearchResultDto::getName).contains("ROOT1", "ROOT2");
+
+        List<SearchResultDto> sensorResults = treeDataService.searchNodes("SENSOR");
+        assertThat(sensorResults).hasSize(1);
+        assertThat(sensorResults.get(0).getName()).isEqualTo("SENSOR1");
     }
 
     @Test
     void testRevealPath() {
-        RevealPathDto revealData = treeDataService.revealPath("root|1|factory-a|line-1");
+        RevealPathDto revealData = treeDataService.revealPath(104L);
 
         // Check path
-        assertThat(revealData.getPath()).hasSize(3);
-        assertThat(revealData.getPath()).extracting(NodeDto::getId).containsExactly("root|1", "root|1|factory-a", "root|1|factory-a|line-1");
+        assertThat(revealData.getPath()).hasSize(2);
+        assertThat(revealData.getPath()).extracting(NodeDto::getId).containsExactly("101", "104");
 
         // Check children map
-        assertThat(revealData.getChildrenMap()).hasSize(2);
-        assertThat(revealData.getChildrenMap().get("root|1")).hasSize(2); // Factory A, Factory B
-        assertThat(revealData.getChildrenMap().get("root|1|factory-a")).hasSize(3); // 1 prod line + 2 sensors
+        assertThat(revealData.getChildrenMap()).hasSize(1); // Only parent of target node
+        assertThat(revealData.getChildrenMap().get("101")).hasSize(2); // NODE1 and SENSOR1
     }
 }

@@ -10,7 +10,7 @@
     class="scroller h-100"
     :items="flattenedNodes"
     :item-size="32"
-    :key-field="'id'"
+    :key-field="'uniqueId'"
     role="tree"
     aria-label="System Explorer Tree"
     @keydown="handleKeydown"
@@ -20,13 +20,12 @@
       :class="[
         'tree-node',
         { 'highlight': node.id === highlightedItemId },
-        { 'is-focused': index === focusedIndex } // Simplified, reliable focus class
+        { 'is-focused': node.isFocused }
       ]"
       :style="{ paddingLeft: `${node._depth * 20}px` }"
-      :ref="el => { if (index === focusedIndex) focusedItemRef = el }"
-      :tabindex="index === focusedIndex ? 0 : -1"
+      :ref="el => { if (node.isFocused) focusedItemRef = el; }"
+      :tabindex="node.isFocused ? 0 : -1"
       @click="handleClick(node, index)"
-      @focus="focusedIndex = index"
       role="treeitem"
       :aria-level="node._depth + 1"
       :aria-expanded="node.type === 'folder' && node.hasChildren ? openNodes[node.id] : undefined"
@@ -35,7 +34,7 @@
     >
       <div class="node-content">
         <div class="node-icon">
-          <v-progress-circular v-if="node.isLoading" indeterminate size="18" width="2" color="primary"></v-progress-circular>
+          <v-progress-circular v-if="loadingNodes[node.id]" indeterminate size="18" width="2" color="primary"></v-progress-circular>
           <template v-else-if="node.type === 'folder'">
             <v-icon v-if="node.hasChildren">{{ openNodes[node.id] ? 'mdi-folder-open-outline' : 'mdi-folder-outline' }}</v-icon>
             <v-icon v-else color="grey-darken-1">mdi-folder-outline</v-icon>
@@ -60,7 +59,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, watch, nextTick, onMounted } from 'vue';
+import { ref, watch, nextTick, onMounted, onUnmounted } from 'vue';
 import { storeToRefs } from 'pinia';
 import { RecycleScroller } from 'vue-virtual-scroller';
 import 'vue-virtual-scroller/dist/vue-virtual-scroller.css';
@@ -71,43 +70,66 @@ const emit = defineEmits(['sensor-selected']);
 // --- Pinia Store ---
 const store = useTreeStore();
 const {
-  rootNodeIds,
   highlightedItemId,
-  isSearchActive,
-  virtualTreeRef,
   openNodes,
   scrollToNodeId,
+  virtualTreeRef,
 } = storeToRefs(store);
-const { fetchNodes, getNode, getChildren } = store;
+const { fetchNodes, getNode, getRootNodeIds, getChildrenIds } = store;
 
 // --- Local State ---
 const isLoading = ref(true);
+const loadingNodes = ref<Record<string, boolean>>({});
 const scrollerRef = ref<any>(null);
-const focusedIndex = ref(0);
 const focusedItemRef = ref<any>(null);
 
 // --- Computed Properties ---
-const flattenedNodes = computed(() => {
+const flattenedNodes = ref<any[]>([]);
+
+const updateFlattenedNodes = (focusedNodeId: string | null = null) => {
   const result: any[] = [];
-  const flatten = (nodeIds: string[], depth: number) => {
-    for (const nodeId of nodeIds) {
-      const node = getNode(nodeId);
+  let focusedIndex = -1;
+
+  const flatten = (nodeIdentifiers: {id: string, type: string}[], depth: number) => {
+    for (const { id, type } of nodeIdentifiers) {
+      const node = getNode(id, type);
       if (!node) continue;
 
-      result.push({ ...node, _depth: depth });
+      const isFocused = focusedNodeId ? (node.uniqueId === focusedNodeId) : false;
+      if (isFocused) {
+        focusedIndex = result.length;
+      }
 
-      if (openNodes.value[node.id] && node.hasChildren) {
-        const children = getChildren(node.id);
-        if (children.length > 0) {
-          flatten(children.map(c => c.id), depth + 1);
+      result.push({
+        ...node,
+        uniqueId: `${type}-${id}`,
+        _depth: depth,
+        isFocused: isFocused,
+      });
+
+      if (openNodes.value[id] && node.hasChildren) {
+        const childrenIds = getChildrenIds(id);
+        if (childrenIds.length > 0) {
+          flatten(childrenIds, depth + 1);
         }
       }
     }
   };
 
-  flatten(rootNodeIds.value, 0);
-  return result;
-});
+  flatten(getRootNodeIds(), 0);
+  
+  if (focusedIndex === -1 && result.length > 0) {
+    result[0].isFocused = true;
+  }
+
+  flattenedNodes.value = result;
+  applyFocus();
+};
+
+watch(openNodes, () => {
+  const focusedNode = flattenedNodes.value.find(n => n.isFocused);
+  updateFlattenedNodes(focusedNode?.uniqueId || null);
+}, { deep: true });
 
 // --- Data Fetching and Manipulation ---
 const handleToggleNode = async (node: any) => {
@@ -115,136 +137,144 @@ const handleToggleNode = async (node: any) => {
     emit('sensor-selected', node);
     return;
   }
-
   if (!node.hasChildren) return;
 
   const isOpen = !openNodes.value[node.id];
-  openNodes.value[node.id] = isOpen;
 
-  if (isOpen) {
-    const children = getChildren(node.id);
-    if (children.length === 0) {
-      const nodeInTree = getNode(node.id);
-      if (nodeInTree) nodeInTree.isLoading = true;
-      await fetchNodes(node.id);
-      if (nodeInTree) nodeInTree.isLoading = false;
-    }
+  if (isOpen && getChildrenIds(node.id).length === 0) {
+    loadingNodes.value[node.id] = true;
+    await fetchNodes(node.id);
+    loadingNodes.value[node.id] = false;
   }
+
+  openNodes.value[node.id] = isOpen;
 };
 
 // --- Lifecycle and Focus Management ---
 onMounted(async () => {
   virtualTreeRef.value = {
-    setFocusByIndex,
-    getFocusedIndex: () => focusedIndex.value,
     focus: focus,
   };
 
   isLoading.value = true;
   await fetchNodes(null);
+  updateFlattenedNodes();
   isLoading.value = false;
 
-  await nextTick();
-  focus();
+  window.addEventListener('keydown', handleGlobalKeydown);
 });
 
-const applyFocus = (index: number) => {
-  nextTick(() => {
+onUnmounted(() => {
+  window.removeEventListener('keydown', handleGlobalKeydown);
+});
+
+const handleGlobalKeydown = (event: KeyboardEvent) => {
+  const target = event.target as HTMLElement;
+  if (['INPUT', 'TEXTAREA'].includes(target.tagName)) {
+    return;
+  }
+  if (event.key === 't') {
+    event.preventDefault();
+    focus();
+  }
+};
+
+const applyFocus = () => {
+  setTimeout(() => {
     focusedItemRef.value?.focus();
-  });
+    focusedItemRef.value?.scrollIntoView({ block: 'nearest', behavior: 'auto' });
+  }, 0);
 };
 
 const setFocusByIndex = (index: number) => {
   if (index >= 0 && index < flattenedNodes.value.length) {
-    focusedIndex.value = index;
+    const currentFocused = flattenedNodes.value.find(n => n.isFocused);
+    if (currentFocused) {
+      currentFocused.isFocused = false;
+    }
+    flattenedNodes.value[index].isFocused = true;
+    applyFocus();
   }
 };
 
-watch(focusedIndex, (index) => {
-  applyFocus(index);
-  nextTick(() => {
-      focusedItemRef.value?.scrollIntoView({ block: 'nearest', behavior: 'auto' });
-  });
-});
-
-watch(openNodes, () => {
-  nextTick(() => {
-    focusedItemRef.value?.scrollIntoView({ block: 'nearest', behavior: 'auto' });
-  });
-}, { deep: true });
-
-
 watch(scrollToNodeId, (targetId) => {
   if (targetId) {
-    const index = flattenedNodes.value.findIndex(n => n.id === targetId);
-    if (index !== -1) {
-      setTimeout(() => {
-        scrollerRef.value.scrollToItem(index);
-        setFocusByIndex(index);
-        scrollToNodeId.value = null; // Reset the signal
-      }, 50);
-    }
+    nextTick(async () => {
+      const path = await store.revealPath(targetId);
+      if (path) {
+        const targetNode = path.find(p => p.id === targetId);
+        if (targetNode) {
+          updateFlattenedNodes(`${targetNode.type}-${targetNode.id}`);
+        }
+      }
+      scrollToNodeId.value = null;
+    });
   }
 });
 
 // --- Keyboard Navigation ---
 const handleClick = (node: any, index: number) => {
-  focusedIndex.value = index;
+  setFocusByIndex(index);
   handleToggleNode(node);
 };
 
-const handleKeydown = (event: KeyboardEvent) => {
+const handleKeydown = async (event: KeyboardEvent) => {
   const { key } = event;
-  const currentIndex = focusedIndex.value;
-  const currentNode = flattenedNodes.value[currentIndex];
-  if (!currentNode) return;
+  const currentIndex = flattenedNodes.value.findIndex(n => n.isFocused);
+  if (currentIndex === -1) return;
 
-  if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', ' ', 'Enter'].includes(key)) {
-    event.preventDefault();
-  }
+  event.preventDefault();
+
+  const currentNode = flattenedNodes.value[currentIndex];
+  let newIndex = currentIndex;
 
   switch (key) {
     case 'ArrowUp':
-      if (currentIndex > 0) focusedIndex.value--;
+      if (currentIndex > 0) newIndex = currentIndex - 1;
       break;
     case 'ArrowDown':
-      if (currentIndex < flattenedNodes.value.length - 1) focusedIndex.value++;
+      if (currentIndex < flattenedNodes.value.length - 1) newIndex = currentIndex + 1;
       break;
     case 'ArrowRight':
       if (currentNode.type === 'folder' && currentNode.hasChildren) {
         if (!openNodes.value[currentNode.id]) {
-          handleToggleNode(currentNode);
-          nextTick(() => {
-            if ((currentIndex + 1) < flattenedNodes.value.length && flattenedNodes.value[currentIndex + 1]._depth > currentNode._depth) {
-              focusedIndex.value++;
-            }
-          });
+          await handleToggleNode(currentNode);
         } else {
-          if ((currentIndex + 1) < flattenedNodes.value.length && flattenedNodes.value[currentIndex + 1]._depth > currentNode._depth) {
-            focusedIndex.value++;
+          if ((currentIndex + 1) < flattenedNodes.value.length) {
+            newIndex = currentIndex + 1;
           }
         }
       }
       break;
     case 'ArrowLeft':
       if (currentNode.type === 'folder' && openNodes.value[currentNode.id]) {
-        handleToggleNode(currentNode);
+        await handleToggleNode(currentNode);
       } else if (currentNode._depth > 0) {
         const parentIndex = flattenedNodes.value.findLastIndex((n, i) => i < currentIndex && n._depth < currentNode._depth);
         if (parentIndex !== -1) {
-          focusedIndex.value = parentIndex;
+          newIndex = parentIndex;
         }
       }
       break;
     case ' ':
     case 'Enter':
-      handleToggleNode(currentNode);
+      await handleToggleNode(currentNode);
       break;
+  }
+
+  if (newIndex !== currentIndex) {
+    setFocusByIndex(newIndex);
+  } else {
+    applyFocus();
   }
 };
 
 const focus = () => {
-  applyFocus(focusedIndex.value);
+  const focused = flattenedNodes.value.find(n => n.isFocused);
+  if (!focused && flattenedNodes.value.length > 0) {
+    flattenedNodes.value[0].isFocused = true;
+  }
+  applyFocus();
 };
 
 defineExpose({ focus });
@@ -252,6 +282,9 @@ defineExpose({ focus });
 </script>
 
 <style scoped>
+.scroller {
+  height: 100%;
+}
 .tree-node {
   height: 32px;
   display: flex;
